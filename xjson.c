@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
 #include "xjson.h"
@@ -324,7 +325,15 @@ static xj_value *parseNumber(context_t *ctx)
 
     while(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]))
     {
+        if(parsed > (INT64_MAX - ctx->str[ctx->i] + '0') / 10)
+            {
+                /* Overflow */
+                xj_report(ctx->error, "Integer would overflow");
+                return NULL;
+            }
+
         parsed = parsed * 10 + ctx->str[ctx->i] - '0';
+
         ctx->i += 1;
     }
 
