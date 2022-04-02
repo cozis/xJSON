@@ -381,14 +381,18 @@ static xj_value *parseArray(context_t *ctx)
         if(child == NULL)
             return NULL;
 
+        // Skip whitespace.
+        while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+            ctx->i += 1;
+
         if(ctx->i == ctx->len)
         {
             xj_report(ctx->error, "String ended inside an array, right after the %dth child", count+1);
             return NULL;
         }
 
-        (*tail)->next = child;
         *tail = child;
+        tail = &child->next;
         count += 1;
 
         if(ctx->str[ctx->i] == ']')
@@ -481,10 +485,20 @@ static xj_value *parseObject(context_t *ctx)
         if(child == NULL)
             return NULL;
 
+        // Skip whitespace.
+        while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
+            ctx->i += 1;
+
+        if(ctx->i == ctx->len)
+        {
+            xj_report(ctx->error, "String ended inside an object, right after the %dth child", count+1);
+            return NULL;
+        }
+
         child->key = key;
 
-        (*tail)->next = child;
         *tail = child;
+        tail = &child->next;
         count += 1;
 
         if(ctx->str[ctx->i] == '}')
@@ -682,7 +696,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
             assert(k >= 0 && k < (int) sizeof(temp));
             if(!appendString(buff, temp, k))
                 return 0;
-            break;
+            return 1;
         }
 
         case XJ_FLOAT: 
@@ -693,7 +707,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
             assert(k >= 0 && k < (int) sizeof(temp));
             if(!appendString(buff, temp, k))
                 return 0;
-            break;
+            return 1;
         }
 
         case XJ_ARRAY:
@@ -716,7 +730,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
 
             if(!appendString(buff, "]", 1))
                 return 0;
-            break;
+            return 1;
         }
 
         case XJ_OBJECT:
@@ -727,7 +741,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
             xj_value *child = val->as_object;
             while(child != NULL)
             {
-                if(!encodeString(child->key, -1, buff))
+                if(!encodeString(child->key, strlen(child->key), buff))
                     return 0;
 
                 if(!appendString(buff, ": ", 2))
@@ -745,7 +759,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
 
             if(!appendString(buff, "}", 1))
                 return 0;
-            break;
+            return 1;
         }
 
         case XJ_STRING:
@@ -762,11 +776,11 @@ char *xj_encode(xj_value *value, int *len)
     buff.tail = &buff.head;
     buff.head.next = NULL;
 
-    _Bool failed = !encodeValue(value, &buff);
+    _Bool ok = encodeValue(value, &buff);
     
     char *serialized = NULL;
 
-    if(!failed)
+    if(ok)
     {
         /* Serialize */
 

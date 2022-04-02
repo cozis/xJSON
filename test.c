@@ -16,6 +16,21 @@ static const struct {
     TEST("\t\n true \t\n"),
     TEST("false"),
     TEST("\t\n false \t\n"),
+
+    TEST("1"),
+    TEST("  1  "),
+
+    TEST("9999999999999999999999999999999999999999999"),
+
+    TEST("[]"),
+    TEST("[1, 2, 3]"),
+    TEST("  [  ]  "),
+    TEST("  [  1  ,  2  ,  3  ]  "),
+
+    TEST("{}"),
+    TEST("  {  }  "),
+
+    TEST("  {  \"key\"  :  5  }  "),
 };
 
 #undef TEST
@@ -26,8 +41,14 @@ _Bool json_strings_match(const char *A, const char *B)
 
     do
     {
-        while(isspace(A[Ai])) Ai += 1;
-        while(isspace(B[Bi])) Bi += 1;
+        // TODO: Only ignore spaces if they're
+        //       not inside strings.
+        while(isspace(A[Ai])) 
+            Ai += 1;
+        
+        while(isspace(B[Bi])) 
+            Bi += 1;
+
         if(A[Ai] != B[Bi]) return 0;
         Ai += 1;
         Bi += 1;
@@ -68,7 +89,10 @@ int main()
         }
         else
         {
-            //fprintf(stderr, "Failed.\n");
+            fprintf(stderr, "Failed! Expected:\n");
+            fprintf(stderr, "  %s\n", tests[i].src);
+            fprintf(stderr, "but got:\n");
+            fprintf(stderr, "  %s\n", serialized);
         }
 
         free(serialized);
