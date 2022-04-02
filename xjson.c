@@ -476,12 +476,6 @@ static xj_value *parseObject(context_t *ctx)
         while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
             ctx->i += 1;
 
-        if(ctx->i == ctx->len)
-        {
-            xj_report(ctx->error, "String ended inside an object, right before the %dth child's value", count+1);
-            return NULL;
-        }
-
         xj_value *child = parseValue(ctx);
 
         if(child == NULL)
@@ -522,14 +516,14 @@ static xj_value *parseObject(context_t *ctx)
 
 static xj_value *parseValue(context_t *ctx)
 {
-    assert(!isspace(ctx->str[ctx->i]));
-
     if(ctx->i == ctx->len)
     {
         xj_report(ctx->error, "String ended where a value was expected");
         return NULL;
     }
     
+    assert(!isspace(ctx->str[ctx->i]));
+
     char c = ctx->str[ctx->i];
 
     if(c == '"')
@@ -570,6 +564,7 @@ static xj_value *parseValue(context_t *ctx)
 
     if(ctx->i + kwlen <= ctx->len && !strncmp(ctx->str + ctx->i, kword, kwlen))
     {
+        ctx->i += kwlen;
         switch(c)
         {
             case 'n': return xj_newNull(ctx->alloc);
@@ -615,7 +610,7 @@ xj_value *xj_decode(const char *str, int len,
     }
 
     context_t ctx = { 
-        .str = str, .len = len, 
+        .str = str, .i = i, .len = len, 
         .alloc = alloc, .error = error };
     return parseValue(&ctx);
 }
@@ -767,7 +762,7 @@ char *xj_encode(xj_value *value, int *len)
     buff.tail = &buff.head;
     buff.head.next = NULL;
 
-    _Bool failed = encodeValue(value, &buff);
+    _Bool failed = !encodeValue(value, &buff);
     
     char *serialized = NULL;
 
