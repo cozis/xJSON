@@ -1,0 +1,1 @@
+gcc test.c xjson.c -o test -Wall -Wextra -g
