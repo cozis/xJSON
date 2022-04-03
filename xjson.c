@@ -25,12 +25,12 @@ xj_alloc *xj_newAlloc(int size, int ext)
 {
     assert(size >= 0 && ext >= 0);
     
-    void *temp = malloc(sizeof(xj_alloc) + size);
+    void *temp = malloc(sizeof(xj_alloc) + sizeof(chunk_t) + size);
     
     if(temp == NULL)
         return NULL;
 
-    return xj_newAllocUsing(temp, sizeof(xj_alloc) + size, ext, free);
+    return xj_newAllocUsing(temp, sizeof(xj_alloc) + sizeof(chunk_t) + size, ext, free);
 }
 
 xj_alloc *xj_newAllocUsing(void *mem, int size, int ext, void (*free)(void*))
@@ -45,7 +45,7 @@ xj_alloc *xj_newAllocUsing(void *mem, int size, int ext, void (*free)(void*))
     alloc->tail = (chunk_t*) (alloc + 1);
     alloc->tail->prev = NULL;
     alloc->tail_used = 0;
-    alloc->tail_size = size - sizeof(xj_alloc);
+    alloc->tail_size = size - sizeof(xj_alloc) - sizeof(chunk_t);
     alloc->ext_size = ext;
     return alloc;
 }
