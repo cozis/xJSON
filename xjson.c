@@ -53,9 +53,11 @@ xj_alloc *xj_alloc_using(void *mem, int size, int ext, void (*free)(void*))
 
 void xj_alloc_del(xj_alloc *alloc)
 {
-    if(alloc->free != NULL)
-        alloc->free(alloc);
-
+    // Free all of the allocator's chunks,
+    // with exception of the first one,
+    // which is allocated with the allocator's
+    // header and must be deallocated with
+    // the user-provided callback-
     chunk_t *curr = alloc->tail;
     while(curr->prev != NULL)
     {
@@ -63,6 +65,11 @@ void xj_alloc_del(xj_alloc *alloc)
         free(curr);
         curr = prev;
     }
+
+    // Free the allocator header and first
+    // chunk.
+    if(alloc->free != NULL)
+        alloc->free(alloc);
 }
 
 unsigned long long next_aligned(unsigned long long n)
