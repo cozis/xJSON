@@ -74,7 +74,7 @@ void xj_alloc_del(xj_alloc *alloc)
 
 unsigned long long next_aligned(unsigned long long n)
 {
-    return n & 7 ? n & ~7 : n;
+    return (n & 7) ? (n & ~7) + 8 : n;
 }
 
 void *xj_bpalloc(xj_alloc *alloc, int size)
@@ -101,8 +101,9 @@ void *xj_bpalloc(xj_alloc *alloc, int size)
             alloc->tail_used = 0;
             alloc->tail_size = alloc->ext_size;
         }
-
+    
     void *addr = alloc->tail->body + alloc->tail_used;
+    
     alloc->tail_used += size;
 
     return addr;

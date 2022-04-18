@@ -11,24 +11,17 @@ static const struct {
     const char *src;
 } tests[] = {
     TEST("null"),
-    TEST("\t\n null \t\n"),
     TEST("true"),
-    TEST("\t\n true \t\n"),
     TEST("false"),
-    TEST("\t\n false \t\n"),
-
     TEST("1"),
-    TEST("  1  "),
-    
+    TEST("100"),
+    TEST("1.0"),
+    TEST("100.111"),
     TEST("[]"),
     TEST("[1, 2, 3]"),
-    TEST("  [  ]  "),
-    TEST("  [  1  ,  2  ,  3  ]  "),
-
     TEST("{}"),
-    TEST("  {  }  "),
-
-    TEST("  {  \"key\"  :  5  }  "),
+    TEST("{\"key\":5}"),
+    TEST("{\"key1\":5,\"key2\":3}"),
 };
 
 #undef TEST
@@ -82,7 +75,6 @@ int main()
 
         if(json_strings_match(serialized, tests[i].src))
         {
-            //fprintf(stdout, "Passed.\n");
             passed += 1;
         }
         else
