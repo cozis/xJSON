@@ -19,9 +19,7 @@ static const struct {
 
     TEST("1"),
     TEST("  1  "),
-
-    TEST("9999999999999999999999999999999999999999999"),
-
+    
     TEST("[]"),
     TEST("[1, 2, 3]"),
     TEST("  [  ]  "),
@@ -67,7 +65,7 @@ int main()
 
     for(int i = 0; i < total; i += 1)
     {
-        xj_alloc *alloc = xj_newAllocUsing(pool, sizeof(pool), 0, NULL);
+        xj_alloc *alloc = xj_alloc_using(pool, sizeof(pool), 0, NULL);
         assert(alloc != NULL);
 
         xj_value *val = xj_decode(tests[i].src, -1, alloc, &error);

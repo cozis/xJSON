@@ -21,19 +21,20 @@ struct xj_alloc {
     int  ext_size;
 };
 
-xj_alloc *xj_newAlloc(int size, int ext)
+xj_alloc *xj_alloc_new(int size, int ext)
 {
     assert(size >= 0 && ext >= 0);
     
-    void *temp = malloc(sizeof(xj_alloc) + sizeof(chunk_t) + size);
+    int allocated = sizeof(xj_alloc) + sizeof(chunk_t) + size;
+    void *temp = malloc(allocated);
     
     if(temp == NULL)
         return NULL;
 
-    return xj_newAllocUsing(temp, sizeof(xj_alloc) + sizeof(chunk_t) + size, ext, free);
+    return xj_alloc_using(temp, allocated, ext, free);
 }
 
-xj_alloc *xj_newAllocUsing(void *mem, int size, int ext, void (*free)(void*))
+xj_alloc *xj_alloc_using(void *mem, int size, int ext, void (*free)(void*))
 {
     assert(mem != NULL && size >= 0 && ext >= 0);
 
@@ -45,15 +46,23 @@ xj_alloc *xj_newAllocUsing(void *mem, int size, int ext, void (*free)(void*))
     alloc->tail = (chunk_t*) (alloc + 1);
     alloc->tail->prev = NULL;
     alloc->tail_used = 0;
-    alloc->tail_size = size - sizeof(xj_alloc) - sizeof(chunk_t);
+    alloc->tail_size = size - (sizeof(xj_alloc) + sizeof(chunk_t));
     alloc->ext_size = ext;
     return alloc;
 }
 
-void xj_freeAlloc(xj_alloc *alloc)
+void xj_alloc_del(xj_alloc *alloc)
 {
     if(alloc->free != NULL)
         alloc->free(alloc);
+
+    chunk_t *curr = alloc->tail;
+    while(curr->prev != NULL)
+    {
+        chunk_t *prev = curr->prev;
+        free(curr);
+        curr = prev;
+    }
 }
 
 unsigned long long next_aligned(unsigned long long n)
@@ -86,13 +95,63 @@ void *xj_bpalloc(xj_alloc *alloc, int size)
             alloc->tail_size = alloc->ext_size;
         }
 
-    return alloc->tail->body + (alloc->tail_used += size);
+    void *addr = alloc->tail->body + alloc->tail_used;
+    alloc->tail_used += size;
+
+    return addr;
 }
 
-xj_value *xj_newNull(xj_alloc *alloc)
+static void xj_preport(xj_error *error, const char *src, int off, const char *fmt, ...)
+{
+    if(error != NULL)
+    {
+        int row, col;
+        if(src != NULL)
+        {
+            // Calculate column and row given
+            // the source string and an index
+            // in it.
+            assert(off >= 0);
+            col = 0;
+            row = 0;
+            int i = 0;
+            while(i < off)
+            {
+                if(src[i] == '\n')
+                {
+                    row += 1;
+                    col = 0;
+                }
+                else
+                    col += 1;
+                i += 1;
+            }
+        }
+
+        int k;
+        va_list va;
+        va_start(va, fmt);
+        k = vsnprintf(error->message, sizeof(error->message), fmt, va);
+        va_end(va);
+
+        assert(k >= 0);
+
+        error->truncated = (k >= (int) sizeof(error->message)-1);
+        error->occurred = 1;
+        error->off = off;
+        error->row = row;
+        error->col = col;
+    }
+}
+
+#define xj_report(error, fmt, ...) xj_preport(error, NULL, -1, fmt, ## __VA_ARGS__)
+
+xj_value *xj_value_null(xj_alloc *alloc, xj_error *error)
 {
     xj_value *x = xj_bpalloc(alloc, sizeof(xj_value));
-    if(x != NULL)
+    if(x == NULL)
+        xj_report(error, "Out of memory");
+    else
     {
         x->type = XJ_NULL;
         x->size = -1;
@@ -102,9 +161,9 @@ xj_value *xj_newNull(xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newBool(xj_bool val, xj_alloc *alloc)
+xj_value *xj_value_bool(xj_bool val, xj_alloc *alloc, xj_error *error)
 {
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_BOOL;
@@ -113,9 +172,9 @@ xj_value *xj_newBool(xj_bool val, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newInt(xj_i64 val, xj_alloc *alloc)
+xj_value *xj_value_int(xj_i64 val, xj_alloc *alloc, xj_error *error)
 {
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_INT;
@@ -124,9 +183,9 @@ xj_value *xj_newInt(xj_i64 val, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newFloat(xj_f64 val, xj_alloc *alloc)
+xj_value *xj_value_float(xj_f64 val, xj_alloc *alloc, xj_error *error)
 {
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_FLOAT;
@@ -135,17 +194,17 @@ xj_value *xj_newFloat(xj_f64 val, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newString(const char *str, int len, xj_alloc *alloc)
+xj_value *xj_value_string(const char *str, int len, xj_alloc *alloc, xj_error *error)
 {
     if(str == NULL) str = "";
     if(len < 0) len = strlen(str);
 
-    char *copy = xj_strdup(str, len, alloc);
+    char *copy = xj_strdup(str, len, alloc, error);
     
     if(copy == NULL) 
         return NULL;
 
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_STRING;
@@ -155,7 +214,7 @@ xj_value *xj_newString(const char *str, int len, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newArray__nocheck(xj_value *head, int count, xj_alloc *alloc)
+xj_value *xj_value_array__nocheck(xj_value *head, int count, xj_alloc *alloc, xj_error *error)
 {
     if(count < 0)
     {
@@ -168,7 +227,7 @@ xj_value *xj_newArray__nocheck(xj_value *head, int count, xj_alloc *alloc)
         }
     }
 
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_ARRAY;
@@ -178,7 +237,7 @@ xj_value *xj_newArray__nocheck(xj_value *head, int count, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newArray(xj_value *head, xj_alloc *alloc)
+xj_value *xj_value_array(xj_value *head, xj_alloc *alloc, xj_error *error)
 {
     int count = 0;
     xj_value *curs = head;
@@ -194,10 +253,10 @@ xj_value *xj_newArray(xj_value *head, xj_alloc *alloc)
         curs = curs->next;
     }
 
-    return xj_newArray__nocheck(head, count, alloc);
+    return xj_value_array__nocheck(head, count, alloc, error);
 }
 
-xj_value *xj_newObject__nocheck(xj_value *head, int count, xj_alloc *alloc)
+xj_value *xj_value_object__nocheck(xj_value *head, int count, xj_alloc *alloc, xj_error *error)
 {
     if(count < 0)
     {
@@ -210,7 +269,7 @@ xj_value *xj_newObject__nocheck(xj_value *head, int count, xj_alloc *alloc)
         }
     }
 
-    xj_value *x = xj_newNull(alloc);
+    xj_value *x = xj_value_null(alloc, error);
     if(x != NULL)
     {
         x->type = XJ_OBJECT;
@@ -220,7 +279,7 @@ xj_value *xj_newObject__nocheck(xj_value *head, int count, xj_alloc *alloc)
     return x;
 }
 
-xj_value *xj_newObject(xj_value *head, xj_alloc *alloc)
+xj_value *xj_value_object(xj_value *head, xj_alloc *alloc, xj_error *error)
 {
     int count = 0;
     xj_value *curs = head;
@@ -248,10 +307,10 @@ xj_value *xj_newObject(xj_value *head, xj_alloc *alloc)
         curs = curs->next;
     }
 
-    return xj_newObject__nocheck(head, count, alloc);
+    return xj_value_object__nocheck(head, count, alloc, error);
 }
 
-char *xj_strdup(const char *str, int len, xj_alloc *alloc)
+char *xj_strdup(const char *str, int len, xj_alloc *alloc, xj_error *error)
 {
     assert(str != NULL);
 
@@ -260,29 +319,14 @@ char *xj_strdup(const char *str, int len, xj_alloc *alloc)
 
     char *copy = xj_bpalloc(alloc, len+1);
 
-    if(copy != NULL)
+    if(copy == NULL)
+        xj_report(error, "Out of memory");
+    else
     {
         memcpy(copy, str, len);
         copy[len] = '\0';
     }
     return copy;
-}
-
-static void xj_report(xj_error *error, const char *fmt, ...)
-{
-    if(error != NULL)
-    {
-        int k;
-        va_list va;
-        va_start(va, fmt);
-        k = vsnprintf(error->message, sizeof(error->message), fmt, va);
-        va_end(va);
-
-        assert(k >= 0);
-
-        error->truncated = (k >= (int) sizeof(error->message)-1);
-        error->occurred = 1;
-    }
 }
 
 typedef struct {
@@ -292,7 +336,7 @@ typedef struct {
     xj_error *error;
 } context_t;
 
-static void *parseString(context_t *ctx, _Bool raw)
+static void *parse_string(context_t *ctx, _Bool raw)
 {
     assert(ctx->i < ctx->len && ctx->str[ctx->i] == '"');
 
@@ -313,11 +357,14 @@ static void *parseString(context_t *ctx, _Bool raw)
 
     ctx->i += 1; // Skip '"'.
 
-    return raw ? (void*)    xj_strdup(ctx->str + start, end - start, ctx->alloc) 
-               : (void*) xj_newString(ctx->str + start, end - start, ctx->alloc);
+    void *p = raw ? (void*)    xj_strdup(ctx->str + start, end - start, ctx->alloc, ctx->error) 
+                  : (void*) xj_value_string(ctx->str + start, end - start, ctx->alloc, ctx->error);
+    if(p == NULL)
+        xj_report(ctx->error, "No memory");
+    return p;
 }
 
-static xj_value *parseNumber(context_t *ctx)
+static xj_value *parse_number(context_t *ctx)
 {
     assert(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]));
 
@@ -328,7 +375,7 @@ static xj_value *parseNumber(context_t *ctx)
         if(parsed > (INT64_MAX - ctx->str[ctx->i] + '0') / 10)
             {
                 /* Overflow */
-                xj_report(ctx->error, "Integer would overflow");
+                xj_preport(ctx->error, ctx->str, ctx->i, "Integer would overflow");
                 return NULL;
             }
 
@@ -352,19 +399,19 @@ static xj_value *parseNumber(context_t *ctx)
             ctx->i += 1;
         }
 
-        return xj_newFloat(parsed2, ctx->alloc);
+        return xj_value_float(parsed2, ctx->alloc, ctx->error);
     }
 
-    return xj_newInt(parsed, ctx->alloc);
+    return xj_value_int(parsed, ctx->alloc, ctx->error);
 }
 
-static xj_value *parseValue(context_t *ctx);
+static xj_value *parse_value(context_t *ctx);
 
-static xj_value *parseArray(context_t *ctx)
+static xj_value *parse_array(context_t *ctx)
 {
     assert(ctx->i < ctx->len && ctx->str[ctx->i] == '[');
 
-    ctx->i += 1; // Skip ']'.
+    ctx->i += 1; // Skip '['.
 
     // Skip whitespace.
     while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
@@ -377,7 +424,10 @@ static xj_value *parseArray(context_t *ctx)
     }
 
     if(ctx->str[ctx->i] == ']') /* Empty array */
-        return xj_newArray__nocheck(NULL, 0, ctx->alloc);
+    {
+        ctx->i += 1; // Skip ']'.
+        return xj_value_array__nocheck(NULL, 0, ctx->alloc, ctx->error);
+    }
 
     xj_value  *head = NULL;
     xj_value **tail = &head;
@@ -385,7 +435,7 @@ static xj_value *parseArray(context_t *ctx)
 
     while(1)
     {
-        xj_value *child = parseValue(ctx);
+        xj_value *child = parse_value(ctx);
 
         if(child == NULL)
             return NULL;
@@ -409,7 +459,7 @@ static xj_value *parseArray(context_t *ctx)
         
         if(ctx->str[ctx->i] != ',')
         {
-            xj_report(ctx->error, "Bad character '%c' inside of an array", ctx->str[ctx->i]);
+            xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c' inside of an array", ctx->str[ctx->i]);
             return NULL;
         }
 
@@ -428,10 +478,10 @@ static xj_value *parseArray(context_t *ctx)
 
     ctx->i += 1; // Skip ']'.
 
-    return xj_newArray__nocheck(head, count, ctx->alloc);
+    return xj_value_array__nocheck(head, count, ctx->alloc, ctx->error);
 }
 
-static xj_value *parseObject(context_t *ctx)
+static xj_value *parse_object(context_t *ctx)
 {
     assert(ctx->i < ctx->len && ctx->str[ctx->i] == '{');
 
@@ -448,7 +498,7 @@ static xj_value *parseObject(context_t *ctx)
     }
 
     if(ctx->str[ctx->i] == '}') /* Empty object */
-        return xj_newObject__nocheck(NULL, 0, ctx->alloc);
+        return xj_value_object__nocheck(NULL, 0, ctx->alloc, ctx->error);
 
     xj_value  *head = NULL;
     xj_value **tail = &head;
@@ -458,11 +508,11 @@ static xj_value *parseObject(context_t *ctx)
     {
         if(ctx->str[ctx->i] != '"')
         {
-            xj_report(ctx->error, "Bad character '%c' where a string was expected");
+            xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c' where a string was expected");
             return NULL;
         }
 
-        char *key = parseString(ctx, 1);
+        char *key = parse_string(ctx, 1);
 
         if(key == NULL)
             return NULL;
@@ -479,7 +529,7 @@ static xj_value *parseObject(context_t *ctx)
 
         if(ctx->str[ctx->i] != ':')
         {
-            xj_report(ctx->error, "Bad character '%c' where ':' was expected");
+            xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c' where ':' was expected");
             return NULL;
         }
 
@@ -489,7 +539,7 @@ static xj_value *parseObject(context_t *ctx)
         while(ctx->i < ctx->len && isspace(ctx->str[ctx->i]))
             ctx->i += 1;
 
-        xj_value *child = parseValue(ctx);
+        xj_value *child = parse_value(ctx);
 
         if(child == NULL)
             return NULL;
@@ -515,7 +565,7 @@ static xj_value *parseObject(context_t *ctx)
         
         if(ctx->str[ctx->i] != ',')
         {
-            xj_report(ctx->error, "Bad character '%c' inside of an object", ctx->str[ctx->i]);
+            xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c' inside of an object", ctx->str[ctx->i]);
             return NULL;
         }
 
@@ -534,10 +584,10 @@ static xj_value *parseObject(context_t *ctx)
 
     ctx->i += 1; // Skip '}'.
 
-    return xj_newObject__nocheck(head, count, ctx->alloc);
+    return xj_value_object__nocheck(head, count, ctx->alloc, ctx->error);
 }
 
-static xj_value *parseValue(context_t *ctx)
+static xj_value *parse_value(context_t *ctx)
 {
     if(ctx->i == ctx->len)
     {
@@ -550,16 +600,16 @@ static xj_value *parseValue(context_t *ctx)
     char c = ctx->str[ctx->i];
 
     if(c == '"')
-        return parseString(ctx, 0);
+        return parse_string(ctx, 0);
 
     if(isdigit(c))
-        return parseNumber(ctx);
+        return parse_number(ctx);
 
     if(c == '[')
-        return parseArray(ctx);
+        return parse_array(ctx);
 
     if(c == '{')
-        return parseObject(ctx);
+        return parse_object(ctx);
 
     static const char kword_null [] = "null";
     static const char kword_true [] = "true";
@@ -572,17 +622,20 @@ static xj_value *parseValue(context_t *ctx)
         kword = kword_null;
         kwlen = sizeof(kword_null)-1;
     }
-
-    if(c == 't')
+    else if(c == 't')
     {
         kword = kword_true;
         kwlen = sizeof(kword_true)-1;
     }
-
-    if(c == 'f')
+    else if(c == 'f')
     {
         kword = kword_false;
         kwlen = sizeof(kword_false)-1;
+    }
+    else
+    {
+        xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c'", c);
+        return NULL;
     }
 
     if(ctx->i + kwlen <= ctx->len && !strncmp(ctx->str + ctx->i, kword, kwlen))
@@ -590,9 +643,9 @@ static xj_value *parseValue(context_t *ctx)
         ctx->i += kwlen;
         switch(c)
         {
-            case 'n': return xj_newNull(ctx->alloc);
-            case 't': return xj_newBool(1, ctx->alloc);
-            case 'f': return xj_newBool(0, ctx->alloc);
+            case 'n': return xj_value_null(ctx->alloc, ctx->error);
+            case 't': return xj_value_bool(1, ctx->alloc, ctx->error);
+            case 'f': return xj_value_bool(0, ctx->alloc, ctx->error);
         }
         /* UNREACHABLE */
     }
@@ -610,15 +663,21 @@ static xj_value *parseValue(context_t *ctx)
         ctx->i += p;
     }
 
-    xj_report(ctx->error, "Bad character '%c'", ctx->str[ctx->i]);
+    xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c'", ctx->str[ctx->i]);
     return NULL;
 }
 
 xj_value *xj_decode(const char *str, int len, 
                     xj_alloc *alloc, xj_error *error)
 {
-    if(str == NULL) str = "";
-    if(len < 0) len = strlen(str);
+    if(str == NULL) 
+        str = "";
+    
+    if(len < 0) 
+        len = strlen(str);
+
+    if(error != NULL)
+        memset(error, 0, sizeof(xj_error));
 
     int i = 0;
 
@@ -635,7 +694,7 @@ xj_value *xj_decode(const char *str, int len,
     context_t ctx = { 
         .str = str, .i = i, .len = len, 
         .alloc = alloc, .error = error };
-    return parseValue(&ctx);
+    return parse_value(&ctx);
 }
 
 typedef struct bucket_t bucket_t;
@@ -649,7 +708,7 @@ typedef struct {
     bucket_t *tail, head;
 } buffer_t;
 
-static xj_bool appendString(buffer_t *buff, const char *str, int len)
+static xj_bool append_string(buffer_t *buff, const char *str, int len)
 {
     assert(str != NULL && len >= 0);
 
@@ -671,31 +730,31 @@ static xj_bool appendString(buffer_t *buff, const char *str, int len)
     return 1;
 }
 
-static _Bool encodeString(const char *str, int len, buffer_t *buff)
+static _Bool encode_string(const char *str, int len, buffer_t *buff)
 {
-    if(!appendString(buff, "\"", 1))
+    if(!append_string(buff, "\"", 1))
         return 0;
 
-    if(!appendString(buff, str, len))
+    if(!append_string(buff, str, len))
         return 0;
 
-    if(!appendString(buff, "\"", 1))
+    if(!append_string(buff, "\"", 1))
         return 0;
 
     return 1;
 }
 
-static _Bool encodeValue(xj_value *val, buffer_t *buff)
+static _Bool encode_value(xj_value *val, buffer_t *buff)
 {
     switch(val == NULL ? XJ_NULL : val->type)
     {
         case XJ_NULL: 
-        return appendString(buff, "null", 4);
+        return append_string(buff, "null", 4);
         
         case XJ_BOOL: 
         return val->as_bool 
-            ? appendString(buff, "true", 4) 
-            : appendString(buff, "false", 5);
+            ? append_string(buff, "true", 4) 
+            : append_string(buff, "false", 5);
 
         case XJ_INT:
         {
@@ -703,7 +762,7 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
             int k = snprintf(temp, sizeof(temp), 
                             "%lld", val->as_int);
             assert(k >= 0 && k < (int) sizeof(temp));
-            if(!appendString(buff, temp, k))
+            if(!append_string(buff, temp, k))
                 return 0;
             return 1;
         }
@@ -714,65 +773,65 @@ static _Bool encodeValue(xj_value *val, buffer_t *buff)
             int k = snprintf(temp, sizeof(temp), 
                             "%g", val->as_float);
             assert(k >= 0 && k < (int) sizeof(temp));
-            if(!appendString(buff, temp, k))
+            if(!append_string(buff, temp, k))
                 return 0;
             return 1;
         }
 
         case XJ_ARRAY:
         {
-            if(!appendString(buff, "[", 1))
+            if(!append_string(buff, "[", 1))
                 return 0;
 
             xj_value *child = val->as_object;
             while(child != NULL)
             {
-                if(!encodeValue(child, buff))
+                if(!encode_value(child, buff))
                     return 0;
 
                 child = child->next;
 
                 if(child != NULL)
-                    if(!appendString(buff, ", ", 2))
+                    if(!append_string(buff, ", ", 2))
                         return 0;
             }
 
-            if(!appendString(buff, "]", 1))
+            if(!append_string(buff, "]", 1))
                 return 0;
             return 1;
         }
 
         case XJ_OBJECT:
         {
-            if(!appendString(buff, "{", 1))
+            if(!append_string(buff, "{", 1))
                 return 0;
 
             xj_value *child = val->as_object;
             while(child != NULL)
             {
-                if(!encodeString(child->key, strlen(child->key), buff))
+                if(!encode_string(child->key, strlen(child->key), buff))
                     return 0;
 
-                if(!appendString(buff, ": ", 2))
+                if(!append_string(buff, ": ", 2))
                     return 0;
 
-                if(!encodeValue(child, buff))
+                if(!encode_value(child, buff))
                     return 0;
 
                 child = child->next;
 
                 if(child != NULL)
-                    if(!appendString(buff, ", ", 2))
+                    if(!append_string(buff, ", ", 2))
                         return 0;
             }
 
-            if(!appendString(buff, "}", 1))
+            if(!append_string(buff, "}", 1))
                 return 0;
             return 1;
         }
 
         case XJ_STRING:
-        return encodeString(val->as_string, val->size, buff);
+        return encode_string(val->as_string, val->size, buff);
     }
     return 0;
 }
@@ -785,7 +844,7 @@ char *xj_encode(xj_value *value, int *len)
     buff.tail = &buff.head;
     buff.head.next = NULL;
 
-    _Bool ok = encodeValue(value, &buff);
+    _Bool ok = encode_value(value, &buff);
     
     char *serialized = NULL;
 
