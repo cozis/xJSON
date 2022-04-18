@@ -498,7 +498,10 @@ static xj_value *parse_object(context_t *ctx)
     }
 
     if(ctx->str[ctx->i] == '}') /* Empty object */
+    {
+        ctx->i += 1; // Skip '}'.
         return xj_value_object__nocheck(NULL, 0, ctx->alloc, ctx->error);
+    }
 
     xj_value  *head = NULL;
     xj_value **tail = &head;
