@@ -57,7 +57,7 @@ void xj_alloc_del(xj_alloc *alloc)
     // with exception of the first one,
     // which is allocated with the allocator's
     // header and must be deallocated with
-    // the user-provided callback-
+    // the user-provided callback.
     chunk_t *curr = alloc->tail;
     while(curr->prev != NULL)
     {
@@ -72,6 +72,8 @@ void xj_alloc_del(xj_alloc *alloc)
         alloc->free(alloc);
 }
 
+// Returns [n] if it's multiple of 8, else the 
+// first multiple of 8 after it.
 unsigned long long next_aligned(unsigned long long n)
 {
     return (n & 7) ? (n & ~7) + 8 : n;
@@ -81,17 +83,33 @@ void *xj_bpalloc(xj_alloc *alloc, int size)
 {
     assert(size >= 0);
 
+    // Make sure the returned memory is aligned
+    // to 8 bytes boundaries, which is assumed 
+    // to be the a valid alignment for anything.
     alloc->tail_used = next_aligned(alloc->tail_used);
-
+    
+    // If there's not enough memory in the 
+    // current chunk, allocate an extension.    
     if(alloc->tail_used + size > alloc->tail_size)
         {
-            // Create a new chunk and append it
-            // to the allocator.
-            
+            // When the user instanciated the allocator,
+            // he specified an extension size of 0, which
+            // means that he doesn't want the allocator
+            // to grow. Therefore, we just wen out of 
+            // memory!
             if(alloc->ext_size == 0)
                 return NULL;
 
-            chunk_t *chunk = malloc(sizeof(chunk_t) + alloc->ext_size);
+            // Either allocate a chunk of the size specified
+            // by the user during the instanciation of the
+            // allocator, or a bigger one if the current 
+            // allocation wouldn't fit in it.
+            int new_chunk_size = alloc->ext_size;
+
+            if(new_chunk_size < size)
+                new_chunk_size = size;
+
+            chunk_t *chunk = malloc(sizeof(chunk_t) + new_chunk_size);
 
             if(chunk == NULL)
                 return NULL;
@@ -99,9 +117,10 @@ void *xj_bpalloc(xj_alloc *alloc, int size)
             chunk->prev = alloc->tail;
             alloc->tail = chunk;
             alloc->tail_used = 0;
-            alloc->tail_size = alloc->ext_size;
+            alloc->tail_size = new_chunk_size;
         }
-    
+
+    // Do the bump-pointer's bumping of the pointer.
     void *addr = alloc->tail->body + alloc->tail_used;
     
     alloc->tail_used += size;
@@ -154,6 +173,7 @@ static void xj_preport(xj_error *error, const char *src, int off, const char *fm
 
 #define xj_report(error, fmt, ...) xj_preport(error, NULL, -1, fmt, ## __VA_ARGS__)
 
+// Create an [xj_value] that represents the [null] JSON value.
 xj_value *xj_value_null(xj_alloc *alloc, xj_error *error)
 {
     xj_value *x = xj_bpalloc(alloc, sizeof(xj_value));
@@ -169,6 +189,7 @@ xj_value *xj_value_null(xj_alloc *alloc, xj_error *error)
     return x;
 }
 
+// Create an [xj_value] that represents a boolean value.
 xj_value *xj_value_bool(xj_bool val, xj_alloc *alloc, xj_error *error)
 {
     xj_value *x = xj_value_null(alloc, error);
