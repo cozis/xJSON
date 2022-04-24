@@ -365,31 +365,139 @@ typedef struct {
     xj_error *error;
 } context_t;
 
+typedef struct {
+    char *buffer;
+    int size, capacity;
+    char maybe[256];
+} string_parsing_context_t;
+
+_Bool spc_append(string_parsing_context_t *spc, const char *str, int len)
+{
+    if(spc->size + len > spc->capacity)
+    {
+        // Grow the buffer.
+
+        int new_capacity = spc->capacity * 2;
+
+        if(new_capacity < (spc->size + len))
+            new_capacity = (spc->size + len);
+
+        char *temp;
+
+        if(spc->maybe == spc->buffer)
+        {
+            temp = malloc(new_capacity);
+            
+            if(temp == NULL)
+                return 0;
+
+            memcpy(temp, spc->buffer, spc->size);
+        }
+        else
+        {
+            temp = realloc(spc->buffer, new_capacity);
+        
+            if(temp == NULL)
+                return 0;
+        }
+
+        spc->buffer = temp;
+        spc->capacity = new_capacity;
+    }
+
+    memcpy(spc->buffer + spc->size, str, len);
+    spc->size += len;
+    return 1;
+}
+
+void spc_free(string_parsing_context_t *spc)
+{
+    if(spc->maybe != spc->buffer)
+        free(spc->buffer);
+}
+
 static void *parse_string(context_t *ctx, _Bool raw)
 {
     assert(ctx->i < ctx->len && ctx->str[ctx->i] == '"');
 
-    ctx->i += 1; // Skip '"'.
-
-    int start = ctx->i;
-
-    while(ctx->i < ctx->len && ctx->str[ctx->i] != '"')
-        ctx->i += 1;
-
-    if(ctx->i == ctx->len)
+    string_parsing_context_t spc;
     {
-        xj_report(ctx->error, "String ended inside a string");
-        return NULL;
+        spc.buffer = spc.maybe;
+        spc.size = 0;
+        spc.capacity = sizeof(spc.maybe);
     }
 
-    int end = ctx->i;
+    ctx->i += 1; // Skip '"'.
+
+    while(1)
+    {
+        int start = ctx->i;
+
+        while(ctx->i < ctx->len && ctx->str[ctx->i] != '\\' 
+                                && ctx->str[ctx->i] != '"')
+            ctx->i += 1;
+
+        if(ctx->i == ctx->len)
+        {
+            xj_report(ctx->error, "String ended inside a string");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        int end = ctx->i;
+
+        if(!spc_append(&spc, ctx->str + start, end - start))
+        {
+            xj_report(ctx->error, "Out of memory");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        if(ctx->str[ctx->i] == '"')
+            break;
+
+        assert(ctx->str[ctx->i] == '\\');
+
+        ctx->i += 1; // Skip '\'.
+
+        if(ctx->i == ctx->len)
+        {
+            xj_report(ctx->error, "String ended inside a string");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        char c = ctx->str[ctx->i];
+
+        switch(c)
+        {
+            case 'n': c = '\n'; break;
+            case 't': c = '\t'; break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'r': c = '\r'; break;
+            case 'u': xj_preport(ctx->error, ctx->str, ctx->i, 
+                        "The \\uXXXX form isn't supported yet!"); 
+                      break;
+        }
+
+        if(!spc_append(&spc, &c, 1))
+        {
+            xj_report(ctx->error, "Out of memory");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        ctx->i += 1; // Skip the character after the '\'.
+    }
 
     ctx->i += 1; // Skip '"'.
 
-    void *p = raw ? (void*)    xj_strdup(ctx->str + start, end - start, ctx->alloc, ctx->error) 
-                  : (void*) xj_value_string(ctx->str + start, end - start, ctx->alloc, ctx->error);
+    void *p = raw ? (void*) xj_strdup(spc.buffer, spc.size, ctx->alloc, ctx->error) 
+                  : (void*) xj_value_string(spc.buffer, spc.size, ctx->alloc, ctx->error);
     if(p == NULL)
         xj_report(ctx->error, "No memory");
+    spc_free(&spc);
     return p;
 }
 
