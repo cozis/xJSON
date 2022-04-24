@@ -132,7 +132,8 @@ static void xj_preport(xj_error *error, const char *src, int off, const char *fm
 {
     if(error != NULL)
     {
-        int row, col;
+        int row = -1, 
+            col = -1;
         if(src != NULL)
         {
             // Calculate column and row given
@@ -1368,7 +1369,7 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
         }
         else if((unsigned char) str[i] < 32)
         {
-            char *m;
+            char *m = NULL;
             switch(str[i])
             {
                 case '\t': m = "\\t"; break;
@@ -1381,6 +1382,8 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
                 // Unexpected control character. 
                 break;
             }
+
+            assert(m != NULL);
 
             if(!append_string(buff, m, 2))
                 return 0;
