@@ -557,16 +557,16 @@ static void *parse_string(context_t *ctx, _Bool raw)
             return NULL;
         }
 
-        if(ctx->str[ctx->i] < 32)
+        if((unsigned char) ctx->str[ctx->i] > 127)
         {
-            xj_preport(ctx->error, ctx->str, ctx->i, "String contains control characters");
+            xj_preport(ctx->error, ctx->str, ctx->i, "String contains non-ASCII data");
             spc_free(&spc);
             return NULL;
         }
 
-        if((unsigned char) ctx->str[ctx->i] > 127)
+        if((unsigned char) ctx->str[ctx->i] < 32)
         {
-            xj_preport(ctx->error, ctx->str, ctx->i, "String contains non-ASCII data");
+            xj_preport(ctx->error, ctx->str, ctx->i, "String contains control characters");
             spc_free(&spc);
             return NULL;
         }
