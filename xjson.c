@@ -434,6 +434,122 @@ int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t ut
     return -1;
 }
 
+/* SYMBOL
+**   xutf8_sequence_to_utf32_codepoint
+**
+** DESCRIPTION
+**   Transform a UTF-8 encoded byte sequence pointed by `utf8_data`
+**   into a UTF-32 encoded codepoint.
+**
+** ARGUMENTS
+**   The [utf8_data] pointer refers to the location of the UTF-8 sequence.
+**
+**   The [nbytes] argument specifies the maximum number of bytes that can
+**   be read after [utf8_data]. It can't be negative. 
+**
+**   NOTE: The [nbytes] argument has no relation to the UTF-8 byte count sequence. 
+**         You may think about this argument as the "raw" string length (the one 
+**         [strlen] whould return if [utf8_data] were zero-terminated). 
+**
+**   The [utf32_code] argument is the location where the encoded UTF-32 code
+**   will be stored. It may be NULL, in which case the value is evaluated and then
+**   thrown away.
+**
+** RETURN
+**   The codepoint is returned through the output parameter `utf32_code`.
+**   The returned value is the number of bytes of the UTF-8 sequence that
+**   were scanned to encode the UTF-32 code, or -1 if the UTF-8 sequence
+**   is invalid.
+**
+** NOTE: By calling this function with a NULL [utf32_code], you can check the
+**       validity of a UTF-8 sequence.
+*/
+int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
+{
+    assert(utf8_data != NULL);
+    assert(nbytes >= 0);
+
+    uint32_t dummy;
+    if(utf32_code == NULL)
+        utf32_code = &dummy;
+
+    if(nbytes == 0)
+        return -1;
+
+    if(utf8_data[0] & 0x80)
+        {
+            // May be UTF-8.
+            
+            if((unsigned char) utf8_data[0] >= 0xF0)
+                {
+                    // 4 bytes.
+                    // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+
+                    if(nbytes < 4)
+                        return -1;
+                    
+                    uint32_t temp 
+                        = (((uint32_t) utf8_data[0] & 0x07) << 18) 
+                        | (((uint32_t) utf8_data[1] & 0x3f) << 12)
+                        | (((uint32_t) utf8_data[2] & 0x3f) <<  6)
+                        | (((uint32_t) utf8_data[3] & 0x3f));
+
+                    if(temp > 0x10ffff)
+                        return -1;
+
+                    *utf32_code = temp;
+                    return 4;
+                }
+            
+            if((unsigned char) utf8_data[0] >= 0xE0)
+                {
+                    // 3 bytes.
+                    // 1110xxxx 10xxxxxx 10xxxxxx
+
+                    if(nbytes < 3)
+                        return -1;
+
+                    uint32_t temp
+                        = (((uint32_t) utf8_data[0] & 0x0f) << 12)
+                        | (((uint32_t) utf8_data[1] & 0x3f) <<  6)
+                        | (((uint32_t) utf8_data[2] & 0x3f));
+                    
+                    if(temp > 0x10ffff)
+                        return -1;
+
+                    *utf32_code = temp;
+                    return 3;
+                }
+            
+            if((unsigned char) utf8_data[0] >= 0xC0)
+                {
+                    // 2 bytes.
+                    // 110xxxxx 10xxxxxx
+
+                    if(nbytes < 2)
+                        return -1;
+
+                    *utf32_code 
+                        = (((uint32_t) utf8_data[0] & 0x1f) << 6)
+                        | (((uint32_t) utf8_data[1] & 0x3f));
+                    
+                    assert(*utf32_code <= 0x10ffff);
+                    return 2;
+                }
+            
+            // 1 byte
+            // 10xxxxxx
+            *utf32_code = (uint32_t) utf8_data[0] & 0x3f;
+            return 1;
+        }
+
+    // It's ASCII
+    // 0xxxxxxx
+
+    *utf32_code = (uint32_t) utf8_data[0];
+    return 1;
+}
+
 static _Bool parse_XXXX_after_u(context_t *ctx, uint16_t *res)
 {
     const char *bytes = ctx->str + ctx->i;
@@ -557,13 +673,6 @@ static void *parse_string(context_t *ctx, _Bool raw)
             return NULL;
         }
 
-        if((unsigned char) ctx->str[ctx->i] > 127)
-        {
-            xj_preport(ctx->error, ctx->str, ctx->i, "String contains non-ASCII data");
-            spc_free(&spc);
-            return NULL;
-        }
-
         if((unsigned char) ctx->str[ctx->i] < 32)
         {
             xj_preport(ctx->error, ctx->str, ctx->i, "String contains control characters");
@@ -583,116 +692,135 @@ static void *parse_string(context_t *ctx, _Bool raw)
         if(ctx->str[ctx->i] == '"')
             break;
 
-        assert(ctx->str[ctx->i] == '\\');
-
-        ctx->i += 1; // Skip '\'.
-
-        if(ctx->i == ctx->len)
+        if(ctx->str[ctx->i] == '\\')
         {
-            xj_report(ctx->error, "String ended inside a string");
-            spc_free(&spc);
-            return NULL;
-        }
+            ctx->i += 1; // Skip '\'.
 
-        char c = ctx->str[ctx->i];
-
-        ctx->i += 1; // Skip the character after the '\'.
-
-        if(c == 'u')
-        {
-            int start = ctx->i-2;
-            assert(start >= 0);
-
-            uint16_t first_half;
-            if(!parse_XXXX_after_u(ctx, &first_half))
+            if(ctx->i == ctx->len)
             {
+                xj_report(ctx->error, "String ended inside a string");
                 spc_free(&spc);
                 return NULL;
             }
 
-            int end = ctx->i;
+            char c = ctx->str[ctx->i];
 
-            _Bool have_2_parts = 0;
-            uint16_t second_half;
-            if(ctx->i+1 < ctx->len && ctx->str[ctx->i] == '\\' 
-                                   && ctx->str[ctx->i+1] == 'u')
+            ctx->i += 1; // Skip the character after the '\'.
+
+            if(c == 'u')
             {
-                have_2_parts = 1;
+                int start = ctx->i-2;
+                assert(start >= 0);
 
-                ctx->i += 2; // Skip the "\u". 
-
-                if(!parse_XXXX_after_u(ctx, &second_half))
+                uint16_t first_half;
+                if(!parse_XXXX_after_u(ctx, &first_half))
                 {
                     spc_free(&spc);
                     return NULL;
                 }
 
-                end = ctx->i;
-            }
+                int end = ctx->i;
 
-            uint32_t rune = first_half;
-            if(have_2_parts)
-                rune = (rune << 16) | second_half;
-            
-            char as_utf8[16];
-            int byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
-            if(byte_count_as_utf8 < 0)
-            {
-                // Failed to convert to UTF-8.
-                // Either the rune isn't valid unicode or
-                // the buffer is too small to hold the 
-                // UTF-8 text. We'll assume the buffer is
-                // big enough to hold any UTF-8 symbol and
-                // the error is due to malformed unicode.
-
-                // If the invalid UTF-32 token was invalid
-                // but composed of two \uXXXX tokens, maybe
-                // they're valid individually.
-
-                if(have_2_parts == 0)
+                _Bool have_2_parts = 0;
+                uint16_t second_half;
+                if(ctx->i+1 < ctx->len && ctx->str[ctx->i] == '\\' 
+                                       && ctx->str[ctx->i+1] == 'u')
                 {
-                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
-                    spc_free(&spc);
-                    return NULL;
+                    have_2_parts = 1;
+
+                    ctx->i += 2; // Skip the "\u". 
+
+                    if(!parse_XXXX_after_u(ctx, &second_half))
+                    {
+                        spc_free(&spc);
+                        return NULL;
+                    }
+
+                    end = ctx->i;
                 }
 
-                rune = first_half;
-                byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
-
+                uint32_t rune = first_half;
+                if(have_2_parts)
+                    rune = (rune << 16) | second_half;
+                
+                char as_utf8[16];
+                int byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
                 if(byte_count_as_utf8 < 0)
                 {
-                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
-                    spc_free(&spc);
-                    return NULL;
+                    // Failed to convert to UTF-8.
+                    // Either the rune isn't valid unicode or
+                    // the buffer is too small to hold the 
+                    // UTF-8 text. We'll assume the buffer is
+                    // big enough to hold any UTF-8 symbol and
+                    // the error is due to malformed unicode.
+
+                    // If the invalid UTF-32 token was invalid
+                    // but composed of two \uXXXX tokens, maybe
+                    // they're valid individually.
+
+                    if(have_2_parts == 0)
+                    {
+                        xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                        spc_free(&spc);
+                        return NULL;
+                    }
+
+                    rune = first_half;
+                    byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
+
+                    if(byte_count_as_utf8 < 0)
+                    {
+                        xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                        spc_free(&spc);
+                        return NULL;
+                    }
+
+                    if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                    {
+                        xj_report(ctx->error, "Out of memory");
+                        spc_free(&spc);
+                        return NULL;
+                    }
+
+                    rune = second_half;
+                    byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
+
+                    if(byte_count_as_utf8 < 0)
+                    {
+                        xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                        spc_free(&spc);
+                        return NULL;
+                    }
+
+                    if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                    {
+                        xj_report(ctx->error, "Out of memory");
+                        spc_free(&spc);
+                        return NULL;
+                    }
                 }
-
-                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                else
                 {
-                    xj_report(ctx->error, "Out of memory");
-                    spc_free(&spc);
-                    return NULL;
-                }
-
-                rune = second_half;
-                byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
-
-                if(byte_count_as_utf8 < 0)
-                {
-                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
-                    spc_free(&spc);
-                    return NULL;
-                }
-
-                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
-                {
-                    xj_report(ctx->error, "Out of memory");
-                    spc_free(&spc);
-                    return NULL;
+                    if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                    {
+                        xj_report(ctx->error, "Out of memory");
+                        spc_free(&spc);
+                        return NULL;
+                    }
                 }
             }
             else
             {
-                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                switch(c)
+                {
+                    case 'n': c = '\n'; break;
+                    case 't': c = '\t'; break;
+                    case 'b': c = '\b'; break;
+                    case 'f': c = '\f'; break;
+                    case 'r': c = '\r'; break;
+                }
+
+                if(!spc_append(&spc, &c, 1))
                 {
                     xj_report(ctx->error, "Out of memory");
                     spc_free(&spc);
@@ -702,21 +830,26 @@ static void *parse_string(context_t *ctx, _Bool raw)
         }
         else
         {
-            switch(c)
+            assert(!isascii(ctx->str[ctx->i]));
+
+            int n = xutf8_sequence_to_utf32_codepoint(ctx->str + ctx->i, ctx->len - ctx->i, NULL);
+            if(n < 0)
             {
-                case 'n': c = '\n'; break;
-                case 't': c = '\t'; break;
-                case 'b': c = '\b'; break;
-                case 'f': c = '\f'; break;
-                case 'r': c = '\r'; break;
+                xj_preport(ctx->error, ctx->str, ctx->i, "Invalid UTF-8");
+                spc_free(&spc);
+                return NULL;
             }
 
-            if(!spc_append(&spc, &c, 1))
+            assert(n > 0);
+
+            if(!spc_append(&spc, ctx->str + ctx->i, n))
             {
                 xj_report(ctx->error, "Out of memory");
                 spc_free(&spc);
                 return NULL;
             }
+
+            ctx->i += n;
         }
     }
 
@@ -1195,122 +1328,6 @@ static xj_bool append_string(buffer_t *buff, const char *str, int len)
     memcpy(buff->tail->body + buff->used, str, len);
     buff->used += len;
     buff->size += len;
-    return 1;
-}
-
-/* SYMBOL
-**   xutf8_sequence_to_utf32_codepoint
-**
-** DESCRIPTION
-**   Transform a UTF-8 encoded byte sequence pointed by `utf8_data`
-**   into a UTF-32 encoded codepoint.
-**
-** ARGUMENTS
-**   The [utf8_data] pointer refers to the location of the UTF-8 sequence.
-**
-**   The [nbytes] argument specifies the maximum number of bytes that can
-**   be read after [utf8_data]. It can't be negative. 
-**
-**   NOTE: The [nbytes] argument has no relation to the UTF-8 byte count sequence. 
-**         You may think about this argument as the "raw" string length (the one 
-**         [strlen] whould return if [utf8_data] were zero-terminated). 
-**
-**   The [utf32_code] argument is the location where the encoded UTF-32 code
-**   will be stored. It may be NULL, in which case the value is evaluated and then
-**   thrown away.
-**
-** RETURN
-**   The codepoint is returned through the output parameter `utf32_code`.
-**   The returned value is the number of bytes of the UTF-8 sequence that
-**   were scanned to encode the UTF-32 code, or -1 if the UTF-8 sequence
-**   is invalid.
-**
-** NOTE: By calling this function with a NULL [utf32_code], you can check the
-**       validity of a UTF-8 sequence.
-*/
-int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
-{
-    assert(utf8_data != NULL);
-    assert(nbytes >= 0);
-
-    uint32_t dummy;
-    if(utf32_code == NULL)
-        utf32_code = &dummy;
-
-    if(nbytes == 0)
-        return -1;
-
-    if(utf8_data[0] & 0x80)
-        {
-            // May be UTF-8.
-            
-            if((unsigned char) utf8_data[0] >= 0xF0)
-                {
-                    // 4 bytes.
-                    // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-
-                    if(nbytes < 4)
-                        return -1;
-                    
-                    uint32_t temp 
-                        = (((uint32_t) utf8_data[0] & 0x07) << 18) 
-                        | (((uint32_t) utf8_data[1] & 0x3f) << 12)
-                        | (((uint32_t) utf8_data[2] & 0x3f) <<  6)
-                        | (((uint32_t) utf8_data[3] & 0x3f));
-
-                    if(temp > 0x10ffff)
-                        return -1;
-
-                    *utf32_code = temp;
-                    return 4;
-                }
-            
-            if((unsigned char) utf8_data[0] >= 0xE0)
-                {
-                    // 3 bytes.
-                    // 1110xxxx 10xxxxxx 10xxxxxx
-
-                    if(nbytes < 3)
-                        return -1;
-
-                    uint32_t temp
-                        = (((uint32_t) utf8_data[0] & 0x0f) << 12)
-                        | (((uint32_t) utf8_data[1] & 0x3f) <<  6)
-                        | (((uint32_t) utf8_data[2] & 0x3f));
-                    
-                    if(temp > 0x10ffff)
-                        return -1;
-
-                    *utf32_code = temp;
-                    return 3;
-                }
-            
-            if((unsigned char) utf8_data[0] >= 0xC0)
-                {
-                    // 2 bytes.
-                    // 110xxxxx 10xxxxxx
-
-                    if(nbytes < 2)
-                        return -1;
-
-                    *utf32_code 
-                        = (((uint32_t) utf8_data[0] & 0x1f) << 6)
-                        | (((uint32_t) utf8_data[1] & 0x3f));
-                    
-                    assert(*utf32_code <= 0x10ffff);
-                    return 2;
-                }
-            
-            // 1 byte
-            // 10xxxxxx
-            *utf32_code = (uint32_t) utf8_data[0] & 0x3f;
-            return 1;
-        }
-
-    // It's ASCII
-    // 0xxxxxxx
-
-    *utf32_code = (uint32_t) utf8_data[0];
     return 1;
 }
 
