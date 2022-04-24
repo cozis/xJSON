@@ -365,6 +365,110 @@ typedef struct {
     xj_error *error;
 } context_t;
 
+/* SYMBOL
+**   xutf8_sequence_from_utf32_codepoint
+**
+** DESCRIPTION
+**   Transform a UTF-32 encoded codepoint to a UTF-8 encoded byte sequence.
+**
+** ARGUMENTS
+**   The [utf8_data] pointer refers to the location where the UTF-8 sequence
+**   will be stored.
+**
+**   The [nbytes] argument specifies the maximum number of bytes that can
+**   be written to [utf8_data]. It can't be negative.
+**
+**   The [utf32_code] argument is the UTF-32 code that will be converted.
+**
+** RETURN
+**   If [utf32_code] is valid UTF-32 and the provided buffer is big enough, 
+**   the UTF-8 equivalent sequence is stored in [utf8_data]. No more than
+**   [nbytes] are ever written. If one of those conitions isn't true, -1 is
+**   returned.
+*/
+int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t utf32_code)
+{
+    if(utf32_code < 128)
+        {
+            if(nbytes < 1)
+                return -1;
+
+            utf8_data[0] = utf32_code;
+            return 1;
+        }
+
+    if(utf32_code < 2048)
+        {
+            if(nbytes < 2)
+                return -1;
+
+            utf8_data[0] = 0xc0 | (utf32_code >> 6);
+            utf8_data[1] = 0x80 | (utf32_code & 0x3f);
+            return 2;
+        }
+
+    if(utf32_code < 65536)
+        {
+            if(nbytes < 3)
+                return -1;
+
+            utf8_data[0] = 0xe0 | (utf32_code >> 12);
+            utf8_data[1] = 0x80 | ((utf32_code >> 6) & 0x3f);
+            utf8_data[2] = 0x80 | (utf32_code & 0x3f);
+            return 3;
+        }
+
+    if(utf32_code <= 0x10ffff)
+        {
+            if(nbytes < 4)
+                return -1;
+
+            utf8_data[0] = 0xf0 | (utf32_code >> 18);
+            utf8_data[1] = 0x80 | ((utf32_code >> 12) & 0x3f);
+            utf8_data[2] = 0x80 | ((utf32_code >>  6) & 0x3f);
+            utf8_data[3] = 0x80 | (utf32_code & 0x3f);
+            return 4;
+        }
+
+    // Code is out of range for UTF-8.
+    return -1;
+}
+
+static _Bool parse_XXXX_after_u(context_t *ctx, uint16_t *res)
+{
+    const char *bytes = ctx->str + ctx->i;
+
+    if(ctx->i+3 >= ctx->len 
+        || !isxdigit(bytes[0]) || !isxdigit(bytes[1])
+        || !isxdigit(bytes[2]) || !isxdigit(bytes[3]))
+    {
+        xj_preport(ctx->error, ctx->str, ctx->i, 
+            "The \\u specifier expects 4 hex digits after it");
+        return 0;
+    }
+
+    ctx->i += 4;
+
+    uint16_t rune = 0;
+
+    for(int i = 0; i < 4; i += 1)
+    {
+        char c = tolower(bytes[i]);
+
+        if(isdigit(c))
+            c = c - '0';
+        else
+            c = c - 'a' + 10;
+
+        rune |= c << ((3 - i) * 4);
+    }
+
+    if(res)
+        *res = rune;
+
+    return 1;
+}
+
 typedef struct {
     char *buffer;
     int size, capacity;
@@ -418,6 +522,12 @@ void spc_free(string_parsing_context_t *spc)
 
 static void *parse_string(context_t *ctx, _Bool raw)
 {
+    // This is probably the hottest function of the
+    // parser. JSON documents contain a lot of strings.
+    // The string is scanned and copied into a temporary
+    // buffer, then the buffer is transformed into
+    // the final form that will be returned.
+
     assert(ctx->i < ctx->len && ctx->str[ctx->i] == '"');
 
     string_parsing_context_t spc;
@@ -433,13 +543,30 @@ static void *parse_string(context_t *ctx, _Bool raw)
     {
         int start = ctx->i;
 
-        while(ctx->i < ctx->len && ctx->str[ctx->i] != '\\' 
-                                && ctx->str[ctx->i] != '"')
+        while(ctx->i < ctx->len 
+            && ctx->str[ctx->i] != '\\' 
+            && ctx->str[ctx->i] != '"'
+            && (unsigned char) ctx->str[ctx->i] >= 32
+            && (unsigned char) ctx->str[ctx->i] <= 127)
             ctx->i += 1;
 
         if(ctx->i == ctx->len)
         {
-            xj_report(ctx->error, "String ended inside a string");
+            xj_report(ctx->error, "String ended inside a string value");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        if(ctx->str[ctx->i] < 32)
+        {
+            xj_preport(ctx->error, ctx->str, ctx->i, "String contains control characters");
+            spc_free(&spc);
+            return NULL;
+        }
+
+        if((unsigned char) ctx->str[ctx->i] > 127)
+        {
+            xj_preport(ctx->error, ctx->str, ctx->i, "String contains non-ASCII data");
             spc_free(&spc);
             return NULL;
         }
@@ -469,26 +596,81 @@ static void *parse_string(context_t *ctx, _Bool raw)
 
         char c = ctx->str[ctx->i];
 
-        switch(c)
-        {
-            case 'n': c = '\n'; break;
-            case 't': c = '\t'; break;
-            case 'b': c = '\b'; break;
-            case 'f': c = '\f'; break;
-            case 'r': c = '\r'; break;
-            case 'u': xj_preport(ctx->error, ctx->str, ctx->i, 
-                        "The \\uXXXX form isn't supported yet!"); 
-                      break;
-        }
-
-        if(!spc_append(&spc, &c, 1))
-        {
-            xj_report(ctx->error, "Out of memory");
-            spc_free(&spc);
-            return NULL;
-        }
-
         ctx->i += 1; // Skip the character after the '\'.
+
+        if(c == 'u')
+        {
+            int start = ctx->i-2;
+            assert(start >= 0);
+
+            uint32_t rune;
+            
+            {
+                uint16_t first_half;
+                if(!parse_XXXX_after_u(ctx, &first_half))
+                {
+                    spc_free(&spc);
+                    return NULL;
+                }
+                rune = first_half;
+            }
+
+            int end = ctx->i;
+
+            if(ctx->i+1 < ctx->len && ctx->str[ctx->i] == '\\' 
+                                   && ctx->str[ctx->i+1] == 'u')
+            {
+                ctx->i += 2; // Skip the "\u". 
+                uint16_t second_half;
+                if(!parse_XXXX_after_u(ctx, &second_half))
+                {
+                    spc_free(&spc);
+                    return NULL;
+                }
+                rune = (rune << 16) | second_half;
+                end = ctx->i;
+            }
+
+            char as_utf8[16];
+            int byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
+            if(byte_count_as_utf8 < 0)
+            {
+                // Failed to convert to UTF-8.
+                // Either the rune isn't valid unicode or
+                // the buffer is too small to hold the 
+                // UTF-8 text. We'll assume the buffer is
+                // big enough to hold any UTF-8 symbol and
+                // the error is due to malformed unicode.
+                xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                spc_free(&spc);
+                return NULL;
+            }
+
+            if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+            {
+                xj_report(ctx->error, "Out of memory");
+                spc_free(&spc);
+                return NULL;
+            }
+        }
+        else
+        {
+            switch(c)
+            {
+                case 'n': c = '\n'; break;
+                case 't': c = '\t'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'r': c = '\r'; break;
+            }
+
+            if(!spc_append(&spc, &c, 1))
+            {
+                xj_report(ctx->error, "Out of memory");
+                spc_free(&spc);
+                return NULL;
+            }
+        }
     }
 
     ctx->i += 1; // Skip '"'.
@@ -870,13 +1052,229 @@ static xj_bool append_string(buffer_t *buff, const char *str, int len)
     return 1;
 }
 
+/* SYMBOL
+**   xutf8_sequence_to_utf32_codepoint
+**
+** DESCRIPTION
+**   Transform a UTF-8 encoded byte sequence pointed by `utf8_data`
+**   into a UTF-32 encoded codepoint.
+**
+** ARGUMENTS
+**   The [utf8_data] pointer refers to the location of the UTF-8 sequence.
+**
+**   The [nbytes] argument specifies the maximum number of bytes that can
+**   be read after [utf8_data]. It can't be negative. 
+**
+**   NOTE: The [nbytes] argument has no relation to the UTF-8 byte count sequence. 
+**         You may think about this argument as the "raw" string length (the one 
+**         [strlen] whould return if [utf8_data] were zero-terminated). 
+**
+**   The [utf32_code] argument is the location where the encoded UTF-32 code
+**   will be stored. It may be NULL, in which case the value is evaluated and then
+**   thrown away.
+**
+** RETURN
+**   The codepoint is returned through the output parameter `utf32_code`.
+**   The returned value is the number of bytes of the UTF-8 sequence that
+**   were scanned to encode the UTF-32 code, or -1 if the UTF-8 sequence
+**   is invalid.
+**
+** NOTE: By calling this function with a NULL [utf32_code], you can check the
+**       validity of a UTF-8 sequence.
+*/
+int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
+{
+    assert(utf8_data != NULL);
+    assert(nbytes >= 0);
+
+    uint32_t dummy;
+    if(utf32_code == NULL)
+        utf32_code = &dummy;
+
+    if(nbytes == 0)
+        return -1;
+
+    if(utf8_data[0] & 0x80)
+        {
+            // May be UTF-8.
+            
+            if((unsigned char) utf8_data[0] >= 0xF0)
+                {
+                    // 4 bytes.
+                    // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+
+                    if(nbytes < 4)
+                        return -1;
+                    
+                    uint32_t temp 
+                        = (((uint32_t) utf8_data[0] & 0x07) << 18) 
+                        | (((uint32_t) utf8_data[1] & 0x3f) << 12)
+                        | (((uint32_t) utf8_data[2] & 0x3f) <<  6)
+                        | (((uint32_t) utf8_data[3] & 0x3f));
+
+                    if(temp > 0x10ffff)
+                        return -1;
+
+                    *utf32_code = temp;
+                    return 4;
+                }
+            
+            if((unsigned char) utf8_data[0] >= 0xE0)
+                {
+                    // 3 bytes.
+                    // 1110xxxx 10xxxxxx 10xxxxxx
+
+                    if(nbytes < 3)
+                        return -1;
+
+                    uint32_t temp
+                        = (((uint32_t) utf8_data[0] & 0x0f) << 12)
+                        | (((uint32_t) utf8_data[1] & 0x3f) <<  6)
+                        | (((uint32_t) utf8_data[2] & 0x3f));
+                    
+                    if(temp > 0x10ffff)
+                        return -1;
+
+                    *utf32_code = temp;
+                    return 3;
+                }
+            
+            if((unsigned char) utf8_data[0] >= 0xC0)
+                {
+                    // 2 bytes.
+                    // 110xxxxx 10xxxxxx
+
+                    if(nbytes < 2)
+                        return -1;
+
+                    *utf32_code 
+                        = (((uint32_t) utf8_data[0] & 0x1f) << 6)
+                        | (((uint32_t) utf8_data[1] & 0x3f));
+                    
+                    assert(*utf32_code <= 0x10ffff);
+                    return 2;
+                }
+            
+            // 1 byte
+            // 10xxxxxx
+            *utf32_code = (uint32_t) utf8_data[0] & 0x3f;
+            return 1;
+        }
+
+    // It's ASCII
+    // 0xxxxxxx
+
+    *utf32_code = (uint32_t) utf8_data[0];
+    return 1;
+}
+
 static _Bool encode_string(const char *str, int len, buffer_t *buff)
 {
     if(!append_string(buff, "\"", 1))
         return 0;
 
-    if(!append_string(buff, str, len))
-        return 0;
+    int i = 0;
+    while(1)
+    {
+        int start = i;
+
+        while(i < len && str[i] != '"' && str[i] != '\\'
+                      && (unsigned char) str[i] >= 32 
+                      && (unsigned char) str[i] <= 127)
+            i += 1;
+
+        int end = i;
+
+        if(!append_string(buff, str + start, end - start))
+            return 0;
+
+        if(i == len)
+            break;
+
+        if(str[i] == '"')
+        {
+            if(!append_string(buff, "\\\"", 2))
+                return 0;
+            i += 1;
+        }
+        else if(str[i] == '\\')
+        {
+            if(!append_string(buff, "\\\\", 2))
+                return 0;
+            i += 1;
+        }
+        else if((unsigned char) str[i] < 32)
+        {
+            char *m;
+            switch(str[i])
+            {
+                case '\t': m = "\\t"; break;
+                case '\n': m = "\\n"; break;
+                case '\b': m = "\\b"; break;
+                case '\f': m = "\\f"; break;
+                case '\r': m = "\\r"; break;
+                default: 
+                assert(0); 
+                // Unexpected control character. 
+                break;
+            }
+
+            if(!append_string(buff, m, 2))
+                return 0;
+
+            i += 1;
+        }
+        else
+        {
+            uint32_t rune;
+            int scanned = xutf8_sequence_to_utf32_codepoint(str + i, len - i, &rune);
+            
+            if(scanned < 0)
+            {
+                assert(0);
+                // Invalid UTF-8
+            }
+
+            static const char map[] = "0123456789ABCDEF";
+
+            char buffer[13];
+            int used;
+
+            if((rune >> 16) == 0)
+            {
+                used = 6;
+                buffer[0] = '\\';
+                buffer[1] = 'u';
+                buffer[2] = map[(rune >> 12) & 0xF]; 
+                buffer[3] = map[(rune >>  8) & 0xF];
+                buffer[4] = map[(rune >>  4) & 0xF];
+                buffer[5] = map[(rune >>  0) & 0xF];
+                buffer[6] = '\0';
+            }
+            else
+            {
+                used = 12;
+                buffer[0]  = '\\';
+                buffer[1]  = 'u';
+                buffer[2]  = map[(rune >> 28) & 0xF]; 
+                buffer[3]  = map[(rune >> 24) & 0xF];
+                buffer[4]  = map[(rune >> 20) & 0xF];
+                buffer[5]  = map[(rune >> 16) & 0xF];
+                buffer[6]  = '\\';
+                buffer[7]  = 'u';
+                buffer[8]  = map[(rune >> 12) & 0xF]; 
+                buffer[9]  = map[(rune >>  8) & 0xF];
+                buffer[10] = map[(rune >>  4) & 0xF];
+                buffer[11] = map[(rune >>  0) & 0xF];
+                buffer[12] = '\0';
+            }
+
+            if(!append_string(buff, buffer, used))
+                return 0;
+
+            i += scanned;
+        }
+    }
 
     if(!append_string(buff, "\"", 1))
         return 0;

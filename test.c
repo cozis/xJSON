@@ -22,6 +22,17 @@ static const struct {
     TEST("{}"),
     TEST("{\"key\":5}"),
     TEST("{\"key1\":5,\"key2\":3}"),
+
+    TEST("\"\""),
+    TEST("\"\\f\""),
+    TEST("\"\\t\""),
+    TEST("\"\\n\""),
+    TEST("\"\\b\""),
+    TEST("\"\\r\""),
+    TEST("\"\\\\\""),
+    TEST("\"\\uFFFF\""),
+    TEST("\"\\u0010\\uFFFF\""),
+
 };
 
 #undef TEST
