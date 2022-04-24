@@ -805,6 +805,21 @@ static xj_value *parse_number(context_t *ctx)
             return NULL;
         }
 
+        _Bool negative_exponent = 0;
+        if(ctx->str[ctx->i] == '+' || ctx->str[ctx->i] == '-')
+        {
+            if(ctx->str[ctx->i] == '-')
+                negative_exponent = 1;
+        
+            ctx->i += 1;
+
+            if(ctx->i == ctx->len)
+            {
+                xj_report(ctx->error, "String ended where an exponent was expected");
+                return NULL;
+            }
+        }
+
         if(!isdigit(ctx->str[ctx->i]))
         {
             xj_report(ctx->error, ctx->str, ctx->i, "Expected digit as exponent");
@@ -822,6 +837,9 @@ static xj_value *parse_number(context_t *ctx)
         coeff = 1;
         for(int j = 0; j < exponent; j += 1)
             coeff *= 10;
+
+        if(negative_exponent)
+            coeff = -coeff;
     }
 
     xj_value *v;

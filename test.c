@@ -23,15 +23,6 @@ static const struct {
     TEST("-1.0"),
     TEST("-100.111"),
 
-    TEST("1e1"),
-    TEST("100e1"),
-    TEST("-1e1"),
-    TEST("-100e1"),
-    TEST("1.0e1"),
-    TEST("100.111e1"),
-    TEST("-1.0e1"),
-    TEST("-100.111e10"),
-
     TEST("[]"),
     TEST("[1, 2, 3]"),
     TEST("{}"),
