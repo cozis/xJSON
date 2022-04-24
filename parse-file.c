@@ -23,7 +23,8 @@ char *load_file(const char *path, int *len)
         return NULL;
     }
 
-    if(fread(data, 1, len_, fp) != len_)
+    assert(len_ >= 0);
+    if(fread(data, 1, len_, fp) != (unsigned int) len_)
     {
         free(data);
         fclose(fp);

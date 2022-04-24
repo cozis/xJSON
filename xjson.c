@@ -732,7 +732,29 @@ static void *parse_string(context_t *ctx, _Bool raw)
 
 static xj_value *parse_number(context_t *ctx)
 {
-    assert(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]));
+    assert(ctx->i < ctx->len && (isdigit(ctx->str[ctx->i]) || ctx->str[ctx->i] == '-'));
+
+    _Bool negative = 0;
+    if(ctx->str[ctx->i] == '-')
+    {
+        negative = 1;
+
+        ctx->i += 1; // Skip '-'.
+
+        if(ctx->i == ctx->len)
+        {
+            xj_report(ctx->error, "String ended inside after minus sign");
+            return NULL;
+        }
+
+        if(!isdigit(ctx->str[ctx->i]))
+        {
+            xj_preport(ctx->error, ctx->str, ctx->i, "Expected a digit after minus sign");
+            return NULL;
+        }
+    }
+
+    // NOTE: We allow non-0 numbers starting with 0.
 
     xj_i64 parsed = 0;
 
@@ -752,23 +774,82 @@ static xj_value *parse_number(context_t *ctx)
 
     xj_bool followed_by_dot = ctx->i+1 < ctx->len && ctx->str[ctx->i] == '.' && isdigit(ctx->str[ctx->i+1]);
 
+    xj_f64 decimal;
+
     if(followed_by_dot)
     {
         ctx->i += 1; // Skip '.'.
 
-        xj_f64 parsed2 = parsed, f = 1.0;
+        xj_f64 f = 1.0;
+
+        decimal = 0;
 
         while(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]))
         {
             f /= 10;
-            parsed2 += f * (ctx->str[ctx->i] - '0');
+            decimal += f * (ctx->str[ctx->i] - '0');
+            ctx->i += 1;
+        }
+    }
+
+    _Bool have_exponent = 0;
+    xj_f64 coeff;
+
+    if(ctx->i < ctx->len && (ctx->str[ctx->i] == 'e' || ctx->str[ctx->i] == 'E'))
+    {
+        ctx->i += 1; // Skip 'e'.
+
+        if(ctx->i == ctx->len)
+        {
+            xj_report(ctx->error, "String ended where an exponent was expected");
+            return NULL;
+        }
+
+        if(!isdigit(ctx->str[ctx->i]))
+        {
+            xj_report(ctx->error, ctx->str, ctx->i, "Expected digit as exponent");
+            return NULL;
+        }
+
+        have_exponent = 1;
+        int exponent = 0;
+        while(ctx->i < ctx->len && isdigit(ctx->str[ctx->i]))
+        {
+            exponent = exponent * 10 + ctx->str[ctx->i] - '0';
             ctx->i += 1;
         }
 
-        return xj_value_float(parsed2, ctx->alloc, ctx->error);
+        coeff = 1;
+        for(int j = 0; j < exponent; j += 1)
+            coeff *= 10;
     }
 
-    return xj_value_int(parsed, ctx->alloc, ctx->error);
+    xj_value *v;
+    if(followed_by_dot)
+    {
+        xj_f64 r = (xj_f64) parsed + decimal;
+        
+        if(negative) 
+            r = -r;
+
+        if(have_exponent)
+            r = r * coeff;
+
+        v = xj_value_float(r, ctx->alloc, ctx->error);
+    }
+    else
+    {
+        xj_i64 r = parsed;
+        
+        if(negative) 
+            r = -r;
+
+        if(have_exponent)
+            r = r * coeff;
+
+        v = xj_value_int(r, ctx->alloc, ctx->error);
+    }
+    return v;
 }
 
 static xj_value *parse_value(context_t *ctx);
@@ -971,7 +1052,7 @@ static xj_value *parse_value(context_t *ctx)
     if(c == '"')
         return parse_string(ctx, 0);
 
-    if(isdigit(c))
+    if(isdigit(c) || c == '-')
         return parse_number(ctx);
 
     if(c == '[')
