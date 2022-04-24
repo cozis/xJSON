@@ -1,7 +1,9 @@
+out
 test
 vgcore.*
 *.gcno
 *.gcda
 *.gcov
 parse-file
-all.json
+samples
+fuzzer

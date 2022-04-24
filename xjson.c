@@ -939,6 +939,8 @@ static xj_value *parse_number(context_t *ctx)
             return NULL;
         }
 
+        int exponent_start = ctx->i;
+
         _Bool negative_exponent = 0;
         if(ctx->str[ctx->i] == '+' || ctx->str[ctx->i] == '-')
         {
@@ -956,7 +958,7 @@ static xj_value *parse_number(context_t *ctx)
 
         if(!isdigit(ctx->str[ctx->i]))
         {
-            xj_report(ctx->error, ctx->str, ctx->i, "Expected digit as exponent");
+            xj_preport(ctx->error, ctx->str, ctx->i, "Expected digit as exponent");
             return NULL;
         }
 
@@ -966,6 +968,12 @@ static xj_value *parse_number(context_t *ctx)
         {
             exponent = exponent * 10 + ctx->str[ctx->i] - '0';
             ctx->i += 1;
+        }
+
+        if(exponent > 6)
+        {
+            xj_preport(ctx->error, ctx->str, exponent_start, "Exponent is too big");
+            return NULL;
         }
 
         coeff = 1;
