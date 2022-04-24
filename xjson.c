@@ -603,34 +603,37 @@ static void *parse_string(context_t *ctx, _Bool raw)
             int start = ctx->i-2;
             assert(start >= 0);
 
-            uint32_t rune;
-            
+            uint16_t first_half;
+            if(!parse_XXXX_after_u(ctx, &first_half))
             {
-                uint16_t first_half;
-                if(!parse_XXXX_after_u(ctx, &first_half))
-                {
-                    spc_free(&spc);
-                    return NULL;
-                }
-                rune = first_half;
+                spc_free(&spc);
+                return NULL;
             }
 
             int end = ctx->i;
 
+            _Bool have_2_parts = 0;
+            uint16_t second_half;
             if(ctx->i+1 < ctx->len && ctx->str[ctx->i] == '\\' 
                                    && ctx->str[ctx->i+1] == 'u')
             {
+                have_2_parts = 1;
+
                 ctx->i += 2; // Skip the "\u". 
-                uint16_t second_half;
+
                 if(!parse_XXXX_after_u(ctx, &second_half))
                 {
                     spc_free(&spc);
                     return NULL;
                 }
-                rune = (rune << 16) | second_half;
+
                 end = ctx->i;
             }
 
+            uint32_t rune = first_half;
+            if(have_2_parts)
+                rune = (rune << 16) | second_half;
+            
             char as_utf8[16];
             int byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
             if(byte_count_as_utf8 < 0)
@@ -641,16 +644,60 @@ static void *parse_string(context_t *ctx, _Bool raw)
                 // UTF-8 text. We'll assume the buffer is
                 // big enough to hold any UTF-8 symbol and
                 // the error is due to malformed unicode.
-                xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
-                spc_free(&spc);
-                return NULL;
-            }
 
-            if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                // If the invalid UTF-32 token was invalid
+                // but composed of two \uXXXX tokens, maybe
+                // they're valid individually.
+
+                if(have_2_parts == 0)
+                {
+                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                    spc_free(&spc);
+                    return NULL;
+                }
+
+                rune = first_half;
+                byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
+
+                if(byte_count_as_utf8 < 0)
+                {
+                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                    spc_free(&spc);
+                    return NULL;
+                }
+
+                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                {
+                    xj_report(ctx->error, "Out of memory");
+                    spc_free(&spc);
+                    return NULL;
+                }
+
+                rune = second_half;
+                byte_count_as_utf8 = xutf8_sequence_from_utf32_codepoint(as_utf8, sizeof(as_utf8), rune);
+
+                if(byte_count_as_utf8 < 0)
+                {
+                    xj_preport(ctx->error, ctx->str, start, "Invalid unicode symbol %.*s", end - start, ctx->str + start);
+                    spc_free(&spc);
+                    return NULL;
+                }
+
+                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                {
+                    xj_report(ctx->error, "Out of memory");
+                    spc_free(&spc);
+                    return NULL;
+                }
+            }
+            else
             {
-                xj_report(ctx->error, "Out of memory");
-                spc_free(&spc);
-                return NULL;
+                if(!spc_append(&spc, as_utf8, byte_count_as_utf8))
+                {
+                    xj_report(ctx->error, "Out of memory");
+                    spc_free(&spc);
+                    return NULL;
+                }
             }
         }
         else
