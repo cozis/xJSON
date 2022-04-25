@@ -33,7 +33,6 @@ struct xj_value {
     };
 };
 ```
-
 objects and arrays are represented as linked lists of `xj_value`s.
 
 Although the user can make as many `xj_value` nodes as he wants, some constructor functions are also provided
@@ -73,7 +72,7 @@ xj_alloc *xj_alloc_new(int size, int ext);
 ```
 the first lets you specify the memory that the allocator will use to operate, while the second tells the allocator to call `malloc` to get the memory he needs.
 
-When an `xj_alloc` is instanciated, you can call all of the functions that require you to provide an 'xj_alloc*'. All of the objects that those functions return, will be stored in the allocator. You deallocate all of the nodes by freeing up the whole allocator using
+When an `xj_alloc` is instanciated, you can call all of the functions that require you to provide an `xj_alloc*`. The objects that those functions return will be stored in the allocator. You deallocate all of the nodes by freeing up the whole allocator using
 ```c
 void xj_alloc_del(xj_alloc *alloc);
 ```

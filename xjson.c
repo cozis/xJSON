@@ -7,6 +7,16 @@
 #include <ctype.h>
 #include "xjson.h"
 
+/* OVERVIEW
+ * This file implements the routines required to
+ * decode and encode JSON text. These features are
+ * exposed through the [xj_decode] and [xj_encode]
+ * functions.
+ * 
+ * Here is also designed the object model required
+ * to represent the encoded form of the JSON text.
+ */
+
 typedef struct chunk_t chunk_t;
 struct chunk_t {
     chunk_t *prev;
@@ -21,6 +31,9 @@ struct xj_alloc {
     int  ext_size;
 };
 
+/* Symbol: xj_alloc_new
+ *   Instanciate an allocator.
+ */
 xj_alloc *xj_alloc_new(int size, int ext)
 {
     assert(size >= 0 && ext >= 0);
@@ -387,7 +400,7 @@ typedef struct {
 **   [nbytes] are ever written. If one of those conitions isn't true, -1 is
 **   returned.
 */
-int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t utf32_code)
+static int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t utf32_code)
 {
     if(utf32_code < 128)
         {
@@ -465,7 +478,7 @@ int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t ut
 ** NOTE: By calling this function with a NULL [utf32_code], you can check the
 **       validity of a UTF-8 sequence.
 */
-int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
+static int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
 {
     assert(utf8_data != NULL);
     assert(nbytes >= 0);
@@ -592,7 +605,7 @@ typedef struct {
     char maybe[256];
 } string_parsing_context_t;
 
-_Bool spc_append(string_parsing_context_t *spc, const char *str, int len)
+static _Bool spc_append(string_parsing_context_t *spc, const char *str, int len)
 {
     if(spc->size + len > spc->capacity)
     {
@@ -631,7 +644,7 @@ _Bool spc_append(string_parsing_context_t *spc, const char *str, int len)
     return 1;
 }
 
-void spc_free(string_parsing_context_t *spc)
+static void spc_free(string_parsing_context_t *spc)
 {
     if(spc->maybe != spc->buffer)
         free(spc->buffer);
@@ -1277,6 +1290,39 @@ static xj_value *parse_value(context_t *ctx)
     return NULL;
 }
 
+/* Symbol: 
+ *   xj_decode
+ *
+ * Description:
+ *   Transform a JSON UTF-8 string to a tree of [xj_value] nodes.
+ *
+ * Arguments:
+ *   str: The string to be parsed. It's doesn't need to be
+ *        zero-terminated. If NULL, an empty string is assumed.
+ *
+ *   len: The length of [str] (in bytes). If negative, [str] is
+ *        assumed to be zero-terminated and [len] is computed 
+ *        using [strlen].
+ *
+ *   alloc: The allocator that will be used to store the parsing
+ *          result. It's not optional (can't be NULL).
+ *
+ *   error: The reference to a caller-allocated [xj_error]. If
+ *          an error occurres (NULL is returned) then this is
+ *          used to provide the caller with useful information
+ *          regarting the failure. It's not required and can be
+ *          NULL.
+ *
+ * Returns:
+ *   The pointer to a tree of [xj_value] nodes, or NULL on failure.
+ *   If NULL is returned and an [xj_error] is provided, than it's
+ *   fields are set to provide the caller with extra information
+ *   related to the failure.
+ *
+ * Notes:
+ *   The returned objects are deallocated with the whole allocator
+ *   when calling [xj_alloc_del].
+ */
 xj_value *xj_decode(const char *str, int len, 
                     xj_alloc *alloc, xj_error *error)
 {
@@ -1308,22 +1354,89 @@ xj_value *xj_decode(const char *str, int len,
 }
 
 typedef struct bucket_t bucket_t;
+
+/* Symbol: 
+ *   bucket_t
+ *
+ * Description:
+ *   A memory region that linked with other [bucket_t]
+ *   can represent long strings of text. It's a sub-type
+ *   of [bucket_t].
+ *
+ * Notes:
+ *   This is a big structure.
+ *
+ *   The [body]'s was chosen to be such that the whole
+ *   [bucket_t] is 4kb big, but it's not really necessary.
+ */
 struct bucket_t {
     bucket_t *next;
     char      body[4096-sizeof(void*)];
 };
 
+/* Symbol: 
+ *   buffer_t
+ *
+ * Description:
+ *   A buffer that can be used to build large strings
+ *   without the degradation of performance that one
+ *   would get by using a plain dinamically growing
+ *   array. 
+ *   It's implemented as a linked list of chunks, so
+ *   it grows by adding new chunks, without the need
+ *   to move the old chunks.
+ *
+ * Fields:
+ *   size: The absolute string size (in bytes) that is 
+ *         contained in the buffer. When the buffer is 
+ *         serialized, the resulting string will have 
+ *         this size.
+ *
+ *   used: The amount of bytes held by the last chunk.
+ *
+ *   tail: The pointer to the last chunk.
+ *
+ *   head: The first chunk of the buffer. It's not a
+ *         pointer because it's pre-allocated with
+ *         the [buffer_t].
+ *
+ * Notes:
+ *   The fact that the first chunk comes preallocated with
+ *   the buffer makes it a large structure. A [bucket_t] is
+ *   around 4kb, so a buffer will be bigger than that.
+ *
+ *   The [head] is the last field so that the other fields
+ *   are contiguous in memory. If [head] were between other
+ *   fields, then there would be a 4kb distance between them. 
+ */
 typedef struct {
     int size, used;
     bucket_t *tail, head;
 } buffer_t;
 
-static xj_bool append_string(buffer_t *buff, const char *str, int len)
+/* Symbol: 
+ *   buffer_append
+ *
+ * Description:
+ *   Appends a string to a [buffer_t].
+ *
+ * Returns:
+ *   1 if all went well or 0 if an error occurred.
+ */
+static xj_bool buffer_append(buffer_t *buff, const char *str, int len)
 {
     assert(str != NULL && len >= 0);
 
+    // If there's not enough memory in the tail chunk
+    // then create a new tail chunk!
+
     if(buff->used + len > (int) sizeof(buff->tail->body))
     {
+        // It's not possible to add a string that
+        // is bigger than a chunk.
+        if(len > (int) sizeof(buff->tail->body))
+            retunr 0;
+
         bucket_t *buck = malloc(sizeof(bucket_t));
 
         if(buck == NULL)
@@ -1334,15 +1447,27 @@ static xj_bool append_string(buffer_t *buff, const char *str, int len)
         buff->tail = buck;
         buff->used = 0;
     }
+
     memcpy(buff->tail->body + buff->used, str, len);
     buff->used += len;
     buff->size += len;
     return 1;
 }
 
+/* Symbol: 
+ *   encode_string
+ *
+ * Description:
+ *   Serializes a string to a [buffer_t] in JSON form.
+ *
+ * Returns:
+ *   1 if all went well or 0 if an error occurred.
+ */
 static _Bool encode_string(const char *str, int len, buffer_t *buff)
 {
-    if(!append_string(buff, "\"", 1))
+    assert(str != NULL && len >= 0);
+
+    if(!buffer_append(buff, "\"", 1))
         return 0;
 
     int i = 0;
@@ -1357,7 +1482,7 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
 
         int end = i;
 
-        if(!append_string(buff, str + start, end - start))
+        if(!buffer_append(buff, str + start, end - start))
             return 0;
 
         if(i == len)
@@ -1365,13 +1490,13 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
 
         if(str[i] == '"')
         {
-            if(!append_string(buff, "\\\"", 2))
+            if(!buffer_append(buff, "\\\"", 2))
                 return 0;
             i += 1;
         }
         else if(str[i] == '\\')
         {
-            if(!append_string(buff, "\\\\", 2))
+            if(!buffer_append(buff, "\\\\", 2))
                 return 0;
             i += 1;
         }
@@ -1393,7 +1518,7 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
 
             assert(m != NULL);
 
-            if(!append_string(buff, m, 2))
+            if(!buffer_append(buff, m, 2))
                 return 0;
 
             i += 1;
@@ -1443,30 +1568,39 @@ static _Bool encode_string(const char *str, int len, buffer_t *buff)
                 buffer[12] = '\0';
             }
 
-            if(!append_string(buff, buffer, used))
+            if(!buffer_append(buff, buffer, used))
                 return 0;
 
             i += scanned;
         }
     }
 
-    if(!append_string(buff, "\"", 1))
+    if(!buffer_append(buff, "\"", 1))
         return 0;
 
     return 1;
 }
 
+/* Symbol: 
+ *   encode_value
+ *
+ * Description:
+ *   Serializes an [xj_value] to a [buffer_t]
+ *
+ * Returns:
+ *   1 if all went well or 0 if an error occurred.
+ */
 static _Bool encode_value(xj_value *val, buffer_t *buff)
 {
     switch(val == NULL ? XJ_NULL : val->type)
     {
         case XJ_NULL: 
-        return append_string(buff, "null", 4);
+        return buffer_append(buff, "null", 4);
         
         case XJ_BOOL: 
         return val->as_bool 
-            ? append_string(buff, "true", 4) 
-            : append_string(buff, "false", 5);
+            ? buffer_append(buff, "true", 4) 
+            : buffer_append(buff, "false", 5);
 
         case XJ_INT:
         {
@@ -1474,7 +1608,7 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
             int k = snprintf(temp, sizeof(temp), 
                             "%lld", val->as_int);
             assert(k >= 0 && k < (int) sizeof(temp));
-            if(!append_string(buff, temp, k))
+            if(!buffer_append(buff, temp, k))
                 return 0;
             return 1;
         }
@@ -1485,14 +1619,14 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
             int k = snprintf(temp, sizeof(temp), 
                             "%g", val->as_float);
             assert(k >= 0 && k < (int) sizeof(temp));
-            if(!append_string(buff, temp, k))
+            if(!buffer_append(buff, temp, k))
                 return 0;
             return 1;
         }
 
         case XJ_ARRAY:
         {
-            if(!append_string(buff, "[", 1))
+            if(!buffer_append(buff, "[", 1))
                 return 0;
 
             xj_value *child = val->as_object;
@@ -1504,18 +1638,18 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
                 child = child->next;
 
                 if(child != NULL)
-                    if(!append_string(buff, ", ", 2))
+                    if(!buffer_append(buff, ", ", 2))
                         return 0;
             }
 
-            if(!append_string(buff, "]", 1))
+            if(!buffer_append(buff, "]", 1))
                 return 0;
             return 1;
         }
 
         case XJ_OBJECT:
         {
-            if(!append_string(buff, "{", 1))
+            if(!buffer_append(buff, "{", 1))
                 return 0;
 
             xj_value *child = val->as_object;
@@ -1524,7 +1658,7 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
                 if(!encode_string(child->key, strlen(child->key), buff))
                     return 0;
 
-                if(!append_string(buff, ": ", 2))
+                if(!buffer_append(buff, ": ", 2))
                     return 0;
 
                 if(!encode_value(child, buff))
@@ -1533,11 +1667,11 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
                 child = child->next;
 
                 if(child != NULL)
-                    if(!append_string(buff, ", ", 2))
+                    if(!buffer_append(buff, ", ", 2))
                         return 0;
             }
 
-            if(!append_string(buff, "}", 1))
+            if(!buffer_append(buff, "}", 1))
                 return 0;
             return 1;
         }
@@ -1548,6 +1682,27 @@ static _Bool encode_value(xj_value *val, buffer_t *buff)
     return 0;
 }
 
+/* Symbol: 
+ *   xj_encode
+ *
+ * Description:
+ *   Transforms an [xj_value] to a string.
+ *
+ * Arguments:
+ *   value: The object to be converted to a string.
+ *
+ *     len: An output argument that returns the length
+ *          of the generated string. It's optional, so 
+ *          it can be NULL.
+ *
+ * Returns:
+ *   The pointer to a zero-terminated string if all went
+ *   well or NULL. 
+ *
+ * Notes:
+ *   The returned pointer, if not NULL, must be 
+ *   deallocated using [free].
+ */
 char *xj_encode(xj_value *value, int *len)
 {
     buffer_t buff;
