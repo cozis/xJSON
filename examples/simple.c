@@ -19,24 +19,26 @@ int main()
     // ..error?
     if(val == NULL)
         fprintf(stderr, "Failed to parse!\n");
-    
-    char *name;
-    int   age;
-
-    // Now iterate over the fields to get the name
-    // and age.
-    xj_value *child = val->as_object;
-    while(child != NULL)
+    else
     {
-        if(!strcmp("name", child->key))
-            name = child->as_string;
-        else
-            age = child->as_int;
+        char *name;
+        int   age;
 
-        child = child->next;
+        // Now iterate over the fields to get the name
+        // and age.
+        xj_value *child = val->as_object;
+        while(child != NULL)
+        {
+            if(!strcmp("name", child->key))
+                name = child->as_string;
+            else
+                age = child->as_int;
+
+            child = child->next;
+        }
+
+        printf("name: %s, age: %d\n", name, age);
     }
-
-    printf("name: %s, age: %d\n", name, age);
 
     // Now free everything!
     xj_alloc_del(alloc);
