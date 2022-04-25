@@ -1,11 +1,16 @@
 # xJSON
 xJSON is a lightweight library that implements a JSON encoder, decoder and other utility functions.
 
+## Usage
+To use xJSON, just add `xjson.c` and `xjson.h` to your files, then include `xjson.h` where you want to use it and compile `xjson.c` with your other files.
+
 ## Overview
 The main functions implemented by xJSON are
 ```c
-xj_value *xj_decode(const char *str, int len, xj_alloc *alloc, xj_error *error);
-char     *xj_encode(xj_value *value, int *len);
+xj_value *xj_decode(const char *str, int len, 
+                    xj_alloc *alloc, xj_error *error);
+
+char *xj_encode(xj_value *value, int *len);
 ```
 which let you transform a JSON-encoded UTF-8 string to an `xj_value` and transform an `xj_value` to a string.
 
@@ -39,13 +44,15 @@ Although the user can make as many `xj_value` nodes as he wants, some constructo
 
 ```c
 xj_value *xj_value_null(xj_alloc *alloc, xj_error *error);
-xj_value *xj_value_bool  (xj_bool val, xj_alloc *alloc, xj_error *error);
-xj_value *xj_value_int   (xj_i64  val, xj_alloc *alloc, xj_error *error);
-xj_value *xj_value_float (xj_f64  val, xj_alloc *alloc, xj_error *error);
+
+xj_value *xj_value_bool (xj_bool val, xj_alloc *alloc, xj_error *error);
+xj_value *xj_value_int  (xj_i64  val, xj_alloc *alloc, xj_error *error);
+xj_value *xj_value_float(xj_f64  val, xj_alloc *alloc, xj_error *error);
+
 xj_value *xj_value_array (xj_value *head, xj_alloc *alloc, xj_error *error);
 xj_value *xj_value_object(xj_value *head, xj_alloc *alloc, xj_error *error);
-xj_value *xj_value_string(const char *str, int len, xj_alloc *alloc, xj_error *error);
 
+xj_value *xj_value_string(const char *str, int len, xj_alloc *alloc, xj_error *error);
 ```
 
 ### Error handling
