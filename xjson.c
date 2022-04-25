@@ -7,16 +7,6 @@
 #include <ctype.h>
 #include "xjson.h"
 
-/* OVERVIEW
- * This file implements the routines required to
- * decode and encode JSON text. These features are
- * exposed through the [xj_decode] and [xj_encode]
- * functions.
- * 
- * Here is also designed the object model required
- * to represent the encoded form of the JSON text.
- */
-
 typedef struct chunk_t chunk_t;
 struct chunk_t {
     chunk_t *prev;
@@ -31,8 +21,27 @@ struct xj_alloc {
     int  ext_size;
 };
 
-/* Symbol: xj_alloc_new
+/* Symbol: 
+ *   xj_alloc_new
+ *
+ * Description:
  *   Instanciate an allocator.
+ *
+ * Arguments:
+ *   size: The size of the main memory pool.
+ *
+ *   ext: The size of the pools allocated if the
+ *        main pool isn't enough. By specifying 0,
+ *        you're telling the allocator to only use
+ *        the main pool and fail if it's not enough.
+ *
+ * Returns:
+ *   The pointer to an allocator instance if all went
+ *   well or NULL. 
+ *
+ * Notes:
+ *   The returned pointer, if not NULL, must be 
+ *   deallocated using [xj_alloc_del].
  */
 xj_alloc *xj_alloc_new(int size, int ext)
 {
@@ -47,6 +56,41 @@ xj_alloc *xj_alloc_new(int size, int ext)
     return xj_alloc_using(temp, allocated, ext, free);
 }
 
+/* Symbol: 
+ *   xj_alloc_using
+ *
+ * Description:
+ *   Instanciate an allocator by telling by
+ *   providing it with the main pool's memory.
+ *
+ * Arguments:
+ *   mem: The the pointer to the main memory pool.
+ *        It can't be NULL.
+ *
+ *   size: The size of the region referred by [mem]
+ *         in bytes. It can't be negative.
+ *
+ *   ext: The size of any extension pool allocated
+ *        if the main pool isn't enough.
+ *
+ *   free: The freeing routine that needs to be
+ *         called on [mem] when the allocator is
+ *         destroyed using [xj_alloc_del]. This
+ *         is only called on the [mem] pointer and
+ *         not on any additional extension pool.
+ *
+ * Returns:
+ *   The pointer to an allocator instance if all went
+ *   well or NULL. 
+ *
+ * Notes:
+ *   The returned pointer, if not NULL, must be 
+ *   deallocated using [xj_alloc_del].
+ *
+ *   The [mem] pool is also used to store the allocator's
+ *   header, so if it's not big enough, this function will
+ *   fail.
+ */
 xj_alloc *xj_alloc_using(void *mem, int size, int ext, void (*free)(void*))
 {
     assert(mem != NULL && size >= 0 && ext >= 0);
@@ -64,6 +108,12 @@ xj_alloc *xj_alloc_using(void *mem, int size, int ext, void (*free)(void*))
     return alloc;
 }
 
+/* Symbol: 
+ *   xj_alloc_del
+ *
+ * Description:
+ *   Free an allocator instance.
+ */
 void xj_alloc_del(xj_alloc *alloc)
 {
     // Free all of the allocator's chunks,
@@ -379,27 +429,29 @@ typedef struct {
     xj_error *error;
 } context_t;
 
-/* SYMBOL
-**   xutf8_sequence_from_utf32_codepoint
-**
-** DESCRIPTION
-**   Transform a UTF-32 encoded codepoint to a UTF-8 encoded byte sequence.
-**
-** ARGUMENTS
-**   The [utf8_data] pointer refers to the location where the UTF-8 sequence
-**   will be stored.
-**
-**   The [nbytes] argument specifies the maximum number of bytes that can
-**   be written to [utf8_data]. It can't be negative.
-**
-**   The [utf32_code] argument is the UTF-32 code that will be converted.
-**
-** RETURN
-**   If [utf32_code] is valid UTF-32 and the provided buffer is big enough, 
-**   the UTF-8 equivalent sequence is stored in [utf8_data]. No more than
-**   [nbytes] are ever written. If one of those conitions isn't true, -1 is
-**   returned.
-*/
+/* Symbol:
+ *   xutf8_sequence_from_utf32_codepoint
+ *
+ * Description:
+ *   Transform a UTF-32 encoded codepoint to a UTF-8 encoded byte sequence.
+ *
+ * Arguments:
+ *   utf8_data: Refers to the location of the UTF-8 sequence of bytes.
+ *
+ *   nbytes: The maximum number of bytes that can be written to [utf8_data]. 
+ *           It can't be negative.
+ *
+ *   utf32_code: UTF-32 codepoint that needs to be converted.
+ *
+ * Returns:
+ *   If [utf32_code] is valid UTF-32 and the provided buffer is big enough, 
+ *   the UTF-8 equivalent sequence is stored in [utf8_data]. No more than
+ *   [nbytes] are ever written. If one of those conitions isn't true, -1 is
+ *   returned.
+ *
+ * Notes:
+ *   This was taken by the cozis/xUTF8 library on github.com
+ */
 static int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint32_t utf32_code)
 {
     if(utf32_code < 128)
@@ -448,36 +500,39 @@ static int xutf8_sequence_from_utf32_codepoint(char *utf8_data, int nbytes, uint
     return -1;
 }
 
-/* SYMBOL
-**   xutf8_sequence_to_utf32_codepoint
-**
-** DESCRIPTION
-**   Transform a UTF-8 encoded byte sequence pointed by `utf8_data`
-**   into a UTF-32 encoded codepoint.
-**
-** ARGUMENTS
-**   The [utf8_data] pointer refers to the location of the UTF-8 sequence.
-**
-**   The [nbytes] argument specifies the maximum number of bytes that can
-**   be read after [utf8_data]. It can't be negative. 
-**
-**   NOTE: The [nbytes] argument has no relation to the UTF-8 byte count sequence. 
-**         You may think about this argument as the "raw" string length (the one 
-**         [strlen] whould return if [utf8_data] were zero-terminated). 
-**
-**   The [utf32_code] argument is the location where the encoded UTF-32 code
-**   will be stored. It may be NULL, in which case the value is evaluated and then
-**   thrown away.
-**
-** RETURN
-**   The codepoint is returned through the output parameter `utf32_code`.
-**   The returned value is the number of bytes of the UTF-8 sequence that
-**   were scanned to encode the UTF-32 code, or -1 if the UTF-8 sequence
-**   is invalid.
-**
-** NOTE: By calling this function with a NULL [utf32_code], you can check the
-**       validity of a UTF-8 sequence.
-*/
+/* Symbol
+ *   xutf8_sequence_to_utf32_codepoint
+ *
+ * Description
+ *   Transform a UTF-8 encoded byte sequence pointed by `utf8_data`
+ *   into a UTF-32 encoded codepoint.
+ *
+ * Arguments:
+ *   utf8_data: Refers to the location of the UTF-8 byte sequence.
+ *
+ *   nbytes: The maximum number of bytes that can be read after
+ *           [utf8_data]. It can't be negative. 
+ *
+ *   utf32_code: Location where the encoded UTF-32 code will be stored. 
+ *               It may be NULL, in which case the value is evaluated 
+ *               and then thrown away.
+ *
+ * Returns:
+ *   The codepoint is returned through the output parameter `utf32_code`.
+ *   The returned value is the number of bytes of the UTF-8 sequence that
+ *   were scanned to encode the UTF-32 code, or -1 if the UTF-8 sequence
+ *   is invalid.
+ *
+ * Notes: 
+ *   By calling this function with a NULL [utf32_code], you can check the
+ *   validity of a UTF-8 sequence.
+ *   
+ *   The [nbytes] argument has no relation to the UTF-8 byte count sequence. 
+ *   You may think about this argument as the "raw" string length (the one 
+ *   [strlen] whould return if [utf8_data] were zero-terminated). 
+ *
+*   This was taken by the cozis/xUTF8 library on github.com
+ */
 static int xutf8_sequence_to_utf32_codepoint(const char *utf8_data, int nbytes, uint32_t *utf32_code)
 {
     assert(utf8_data != NULL);
@@ -1435,7 +1490,7 @@ static xj_bool buffer_append(buffer_t *buff, const char *str, int len)
         // It's not possible to add a string that
         // is bigger than a chunk.
         if(len > (int) sizeof(buff->tail->body))
-            retunr 0;
+            return 0;
 
         bucket_t *buck = malloc(sizeof(bucket_t));
 
