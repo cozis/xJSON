@@ -8,11 +8,90 @@
 #include "xjson.h"
 
 typedef struct chunk_t chunk_t;
+
+/* Symbol: 
+ *   chunk_t
+ *
+ * Description:
+ *   This is the structure that implements a pool of
+ *   an [xj_alloc] allocator. It's used for both the
+ *   main pool and any extension pool. It's basically
+ *   just a chunk of memory with a pointer before it
+ *   to make a linked list of chunks.
+ *
+ * Fields:
+ *   prev: Pointer to the previously allocated chunk.
+ *
+ *   body: The actual chunk of memory. This hold the
+ *         memory allocations. It's important to make
+ *         sure that this field is properly aligned
+ *         so that the first allocation is also aligned.
+ */
 struct chunk_t {
     chunk_t *prev;
     _Alignas(void*) char body[];
 };
 
+/* Symbol: 
+ *   xj_alloc
+ *
+ * Description:
+ *   This is the structure that holds the state of a
+ *   bump-pointer allocator.
+ *
+ *   A bump-pointer allocator is the simplest form of
+ *   allocation scheme. It's basically a big pool of
+ *   memory that's linearly filled up with allocations.
+ *   Since the allocations may be of different sizes,
+ *   there's no way of freeing previous allocations,
+ *   so all allocations must be freed at the same time
+ *   with the whole pool.
+ *
+ *   A bump-pointer allocator is good for JSON objects
+ *   because they're made up by lots of nodes with the
+ *   same lifetime. 
+ *
+ *   This implementation allows a dynamic growth of the
+ *   memory it holds by appending extension pools. It's
+ *   both possible to specify the size of the main pool
+ *   and the extension pools on instanciation of the
+ *   allocator (all extension pools will have the same
+ *   size which may be different to the main pool's size).
+ *
+ *   The first pool is allocated along with the allocator
+ *   object. By using [xj_alloc_using], the user provides
+ *   a memory region that the allocator will use to instanciate
+ *   itself. This memory region must both hold the allocator
+ *   and the first chunk. Since this memory was provided
+ *   by the user, he must also be able to specify a way
+ *   to free the provided chunk that holds allocator and
+ *   pool.
+ *
+ * Fields:
+ *   free: An user-provided freeing callback that, if not 
+ *         NULL, is called on the allocator pointer (xj_alloc*).
+ *         This is useful when it's the user to provide
+ *         the allocator with memory, by instanciating it
+ *         using [xj_alloc_using]. 
+ *
+ *   tail: The currently used pool. At first this will refer
+ *         to the main pool. When extensions are added, this
+ *         refers to the last extension.
+ *         All chunks are linked together using their [prev]
+ *         pointer in allocation order, therefore the [tail]
+ *         pointer is the tail of the linked list of all chunks.
+ *
+ *   tail_used: The amount of bytes used of the currently 
+ *              used pool (the [tail]). Allocation occur
+ *              by incrementing this offset in the pool.
+ *
+ *   tail_size: The total size of the tail pool. This is 
+ *              equal to the main pool's size when there
+ *              are no extension pools and it's equal to
+ *              the extensions size when there are.
+ *
+ *    ext_size: The size of an extension pool.
+ */
 struct xj_alloc {
     void (*free)(void*);
     chunk_t *tail;
@@ -135,10 +214,37 @@ void xj_alloc_del(xj_alloc *alloc)
         alloc->free(alloc);
 }
 
-// Returns [n] if it's multiple of 8, else the 
-// first multiple of 8 after it.
+/* Symbol: 
+ *   next_aligned
+ *
+ * Description:
+ *   If the argument is multiple of 8, then
+ *   the argument is returned, else the first
+ *   multiple of 8 higher than the argument is
+ *   returned.
+ */
 unsigned long long next_aligned(unsigned long long n)
 {
+    // NOTE: For powers of 2, the modulo operator
+    //       is equivalent to and & operation where
+    //       the right operand if the power of 2 
+    //       minus 1:
+    //       
+    //         x % (2^i) === x & (2^i - 1)
+    //
+    //       usually & are faster than %'s so if it's
+    //       known that the divisor (the right argument)
+    //       is a power of 2, it's preferred to use the
+    //       &.
+    //
+    // (n & 7) is equivalent to (n % 8), to it's the 
+    // remainder of the division by 8, therefore an 
+    // unaligned [n] will have a non-zero (n & 7).
+    // If the [n] is aligned to 8, then we return 8
+    // (the case after the :). If there's a remainder
+    // then we need to find the first aligned offset
+    // after [n], which can be calculated by removing
+    // the remainder (n & ~7) and adding 8.
     return (n & 7) ? (n & ~7) + 8 : n;
 }
 
