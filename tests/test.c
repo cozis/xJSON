@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
-#include "xjson.h"
+#include <xjson.h>
+#include <xj_snprintf.h>
 
 #define TEST(src_) { .line = __LINE__, .src = src_ }
 

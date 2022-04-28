@@ -1,3 +1,6 @@
+#ifndef XJSON_H
+#define XJSON_H
+
 typedef double    xj_f64;
 typedef long long xj_i64;
 typedef _Bool     xj_bool;
@@ -44,6 +47,9 @@ xj_alloc *xj_alloc_new(int size, int ext);
 void      xj_alloc_del(xj_alloc *alloc);
 void     *xj_bpalloc(xj_alloc *alloc, int size);
 
+void   xj_preport(xj_error *error, const char *src, int off, const char *fmt, ...);
+#define xj_report(error, fmt, ...) xj_preport(error, NULL, -1, fmt, ## __VA_ARGS__)
+
 xj_value *xj_value_null(xj_alloc *alloc, xj_error *error);
 xj_value *xj_value_bool(xj_bool val, xj_alloc *alloc, xj_error *error);
 xj_value *xj_value_int(xj_i64 val, xj_alloc *alloc, xj_error *error);
@@ -58,3 +64,5 @@ char     *xj_strdup(const char *str, int len, xj_alloc *alloc, xj_error *error);
 
 xj_value *xj_decode(const char *str, int len, xj_alloc *alloc, xj_error *error);
 char     *xj_encode(xj_value *value, int *len);
+
+#endif /* XJSON_H */

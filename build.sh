@@ -10,6 +10,6 @@ do
     esac
 done
 
-$CC tests/test.c          src/xjson.c -o test       $FLAGS
+$CC tests/test.c src/xjson.c src/xj_snprintf.c -o test $FLAGS
 $CC examples/parse-file.c src/xjson.c -o parse-file $FLAGS
 $CC examples/simple.c     src/xjson.c -o simple     $FLAGS

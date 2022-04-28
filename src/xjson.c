@@ -297,7 +297,7 @@ void *xj_bpalloc(xj_alloc *alloc, int size)
     return addr;
 }
 
-static void xj_preport(xj_error *error, const char *src, int off, const char *fmt, ...)
+void xj_preport(xj_error *error, const char *src, int off, const char *fmt, ...)
 {
     if(error != NULL)
     {
@@ -340,8 +340,6 @@ static void xj_preport(xj_error *error, const char *src, int off, const char *fm
         error->col = col;
     }
 }
-
-#define xj_report(error, fmt, ...) xj_preport(error, NULL, -1, fmt, ## __VA_ARGS__)
 
 // Create an [xj_value] that represents the [null] JSON value.
 xj_value *xj_value_null(xj_alloc *alloc, xj_error *error)
