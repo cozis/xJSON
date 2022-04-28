@@ -7,6 +7,9 @@
 #include <ctype.h>
 #include "xjson.h"
 
+#define XJ_MAX_DEPTH 128
+#define XJ_MAX_EXPNT 10
+
 typedef struct chunk_t chunk_t;
 
 /* Symbol: 
@@ -568,7 +571,7 @@ char *xj_strdup(const char *str, int len, xj_alloc *alloc, xj_error *error)
 
 typedef struct {
     const char *str;
-    int      i, len;
+    int i, len, depth;
     xj_alloc *alloc;
     xj_error *error;
 } context_t;
@@ -916,14 +919,16 @@ static void *parse_string(context_t *ctx, _Bool raw)
                 return NULL;
             }
 
-            char c = ctx->str[ctx->i];
+            uint32_t rune;
+            int rune_byte_count = xutf8_sequence_to_utf32_codepoint(ctx->str + ctx->i, ctx->len - ctx->i, &rune);
 
-            ctx->i += 1; // Skip the character after the '\'.
-
-            if(c == 'u')
+            if(rune == 'u')
             {
-                int start = ctx->i-2;
+                int start = ctx->i-1; // Points to the '\'.
                 assert(start >= 0);
+
+                assert(rune_byte_count == 1);
+                ctx->i += 1; // Skip the 'u'.
 
                 uint16_t first_half;
                 if(!parse_XXXX_after_u(ctx, &first_half))
@@ -1024,22 +1029,29 @@ static void *parse_string(context_t *ctx, _Bool raw)
             }
             else
             {
-                switch(c)
+                const char *s; int l;
+                switch(rune)
                 {
-                    case 'n': c = '\n'; break;
-                    case 't': c = '\t'; break;
-                    case 'b': c = '\b'; break;
-                    case 'f': c = '\f'; break;
-                    case 'r': c = '\r'; break;
+                    case 'n': s = "\n"; l = 1; break;
+                    case 't': s = "\t"; l = 1; break;
+                    case 'b': s = "\b"; l = 1; break;
+                    case 'f': s = "\f"; l = 1; break;
+                    case 'r': s = "\r"; l = 1; break;
+                    default: 
+                    s = ctx->str + ctx->i; 
+                    l = rune_byte_count;
+                    break;
                 }
 
-                if(!spc_append(&spc, &c, 1))
+                ctx->i += rune_byte_count;
+
+                if(!spc_append(&spc, s, l))
                 {
                     xj_report(ctx->error, "Out of memory");
                     spc_free(&spc);
                     return NULL;
                 }
-            }
+            }    
         }
         else
         {
@@ -1182,7 +1194,7 @@ static xj_value *parse_number(context_t *ctx)
             ctx->i += 1;
         }
 
-        if(exponent > 6)
+        if(exponent > XJ_MAX_EXPNT)
         {
             xj_preport(ctx->error, ctx->str, exponent_start, "Exponent is too big");
             return NULL;
@@ -1416,6 +1428,13 @@ static xj_value *parse_value(context_t *ctx)
         xj_report(ctx->error, "String ended where a value was expected");
         return NULL;
     }
+
+    ctx->depth += 1;
+    if(ctx->depth == XJ_MAX_DEPTH)
+    {
+        xj_preport(ctx->error, ctx->str, ctx->i, "Maximum depth reached");
+        return NULL;
+    }
     
     assert(!isspace(ctx->str[ctx->i]));
 
@@ -1547,7 +1566,7 @@ xj_value *xj_decode(const char *str, int len,
     }
 
     context_t ctx = { 
-        .str = str, .i = i, .len = len, 
+        .str = str, .i = i, .len = len, .depth = 0,
         .alloc = alloc, .error = error };
     return parse_value(&ctx);
 }
