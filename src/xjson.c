@@ -507,6 +507,46 @@ xj_value *xj_value_object(xj_value *head, xj_alloc *alloc, xj_error *error)
     return xj_value_object__nocheck(head, count, alloc, error);
 }
 
+_Bool xj_array_append(xj_value *array, xj_value *child, 
+                      xj_error *error)
+{
+    assert(array != NULL);
+    
+    if(child != NULL)
+    {
+        if(child->key != NULL)
+        {
+            xj_report(error, "Array child can't have a key");
+            return 0;
+        }
+
+        if(child->next != NULL)
+        {
+            xj_report(error, "Array child can't be in a list");
+            return 0;
+        }
+
+        // Find the end of the array
+        xj_value **tail;
+
+        if(array->as_array == NULL)
+            // The tail is the base node pointer
+            tail = &array->as_array;
+        else
+        {
+            // Scan the list 'til the end
+            xj_value *curs = array->as_array;
+            while(curs->next != NULL)
+                curs = curs->next;
+            tail = &curs;
+        }
+
+        *tail = child;
+    }
+
+    return 1;
+}
+
 char *xj_strdup(const char *str, int len, xj_alloc *alloc, xj_error *error)
 {
     assert(str != NULL);

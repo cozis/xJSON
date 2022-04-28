@@ -60,6 +60,8 @@ xj_value *xj_value_string(const char *str, int len, xj_alloc *alloc, xj_error *e
 xj_value *xj_value_array__nocheck(xj_value *head, int count, xj_alloc *alloc, xj_error *error);
 xj_value *xj_value_object__nocheck(xj_value *head, int count, xj_alloc *alloc, xj_error *error);
 
+_Bool     xj_array_append(xj_value *array, xj_value *child, xj_error *error);
+
 char     *xj_strdup(const char *str, int len, xj_alloc *alloc, xj_error *error);
 
 xj_value *xj_decode(const char *str, int len, xj_alloc *alloc, xj_error *error);
