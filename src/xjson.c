@@ -1421,42 +1421,15 @@ static xj_value *parse_object(context_t *ctx)
     return xj_value_object__nocheck(head, count, ctx->alloc, ctx->error);
 }
 
-static xj_value *parse_value(context_t *ctx)
+static xj_value *parse_bool_or_null(context_t *ctx)
 {
-    if(ctx->i == ctx->len)
-    {
-        xj_report(ctx->error, "String ended where a value was expected");
-        return NULL;
-    }
-
-    ctx->depth += 1;
-    if(ctx->depth == XJ_MAX_DEPTH)
-    {
-        xj_preport(ctx->error, ctx->str, ctx->i, "Maximum depth reached");
-        return NULL;
-    }
-    
-    assert(!isspace(ctx->str[ctx->i]));
-
-    char c = ctx->str[ctx->i];
-
-    if(c == '"')
-        return parse_string(ctx, 0);
-
-    if(isdigit(c) || c == '-')
-        return parse_number(ctx);
-
-    if(c == '[')
-        return parse_array(ctx);
-
-    if(c == '{')
-        return parse_object(ctx);
-
     static const char kword_null [] = "null";
     static const char kword_true [] = "true";
     static const char kword_false[] = "false";
     const char *kword;
     int         kwlen;
+
+    char c = ctx->str[ctx->i];
 
     if(c == 'n')
     {
@@ -1497,15 +1470,51 @@ static xj_value *parse_value(context_t *ctx)
         return NULL;
     }
 
+    // Get to the character that made the comparison fail
+    int p = 0;
+    while(kword[p] == ctx->str[ctx->i+p])
+        p += 1;
+    ctx->i += p;
+
+    xj_preport(ctx->error, ctx->str, ctx->i, 
+               "Bad character '%c'", ctx->str[ctx->i]);
+    return NULL;
+}
+
+static xj_value *parse_value(context_t *ctx)
+{
+    if(ctx->i == ctx->len)
     {
-        int p = 0;
-        while(kword[p] == ctx->str[ctx->i+p])
-            p += 1;
-        ctx->i += p;
+        xj_report(ctx->error, "String ended where a value was expected");
+        return NULL;
     }
 
-    xj_preport(ctx->error, ctx->str, ctx->i, "Bad character '%c'", ctx->str[ctx->i]);
-    return NULL;
+    if(ctx->depth+1 == XJ_MAX_DEPTH)
+    {
+        xj_preport(ctx->error, ctx->str, ctx->i, "Maximum depth reached");
+        return NULL;
+    }
+    ctx->depth += 1;
+    
+    assert(!isspace(ctx->str[ctx->i]));
+
+    xj_value *res;
+
+    char c = ctx->str[ctx->i];
+
+    if(c == '"')
+        res = parse_string(ctx, 0);
+    else if(isdigit(c) || c == '-')
+        res = parse_number(ctx);
+    else if(c == '[') 
+        res = parse_array(ctx);
+    else if(c == '{')
+        res = parse_object(ctx);
+    else
+        res = parse_bool_or_null(ctx);
+
+    ctx->depth -= 1;
+    return res;
 }
 
 /* Symbol: 
